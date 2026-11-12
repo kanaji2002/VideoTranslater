@@ -124,7 +124,7 @@ def _overlaps(a: tuple, b: tuple) -> bool:
 
 
 def plan_windows(regions: list[dict], fps: float, n_frames: int, size: tuple[int, int],
-                 *, context_sec: float = 2.0, pad_px: int = 48, max_sec: float = 5.0) -> list[dict]:
+                 *, context_sec: float = 2.0, pad_px: int = 48, max_sec: float = 10.0) -> list[dict]:
     """テロップごとに ProPainter へ渡す範囲 (前後の文脈を含むフレーム範囲 + 周囲を含む切り抜き) を決める。
 
     動画全体を GPU に載せるとメモリが足りないため、テロップの周辺だけを切り出して処理する。
@@ -213,7 +213,9 @@ def inpaint_by_windows(video: Path, regions: list[dict], out: Path, work_dir: Pa
     media.run(["ffmpeg", "-y", "-i", str(video), "-vsync", "0", str(frames_dir / "%06d.png")])
     files = sorted(frames_dir.glob("*.png"))
     fps = info["fps"]
-    windows = plan_windows(regions, fps, len(files), (info["width"], info["height"]))
+    # 1 回に送る長さ (秒)。長いほど依頼回数は減るが、GPU メモリを多く使う
+    windows = plan_windows(regions, fps, len(files), (info["width"], info["height"]),
+                           max_sec=float(os.environ.get("INPAINT_WINDOW_SEC", "10")))
 
     def active(win: dict, idx: int) -> list[tuple]:
         """そのフレームで消す枠。マスクは前後の文脈部分にも付ける (分割の境目で消し方がそろうように)。"""
