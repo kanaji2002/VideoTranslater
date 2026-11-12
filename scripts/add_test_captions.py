@@ -1,12 +1,12 @@
 """検証用: 手元の動画に日本語テロップを焼き込み、正解データ (JSON) も一緒に出す。
 
-    python scripts/add_test_captions.py 入力.mp4 [出力.mp4]
+    python scripts/add_test_captions.py 入力.mp4 [出力.mp4] [--captions テロップ.json]
 
 出力:
   <出力>.mp4           テロップ入りの動画 (S3 の input/ に置いて試す)
   <出力>.truth.json    入れたテロップの文字・時刻・位置 (OCR と翻訳の答え合わせ用)
 
-テロップの内容は CAPTIONS を書き換えてください。動画が短いときは、収まる分だけ入れます。
+テロップの内容は CAPTIONS を書き換えるか、--captions で [[開始秒, 終了秒, "文字", "bottom"], ...] の JSON を渡してください。動画が短いときは、収まる分だけ入れます。
 必要なもの: ffmpeg, Pillow
 """
 
@@ -55,8 +55,14 @@ def probe(path: Path) -> tuple[int, int, float]:
 
 
 def main() -> None:
-    src = Path(sys.argv[1])
-    dst = Path(sys.argv[2]) if len(sys.argv) > 2 else src.with_name(src.stem + "_ja.mp4")
+    args = sys.argv[1:]
+    captions = CAPTIONS
+    if "--captions" in args:
+        i = args.index("--captions")
+        captions = [tuple(c) for c in json.loads(Path(args[i + 1]).read_text())]
+        del args[i:i + 2]
+    src = Path(args[0])
+    dst = Path(args[1]) if len(args) > 1 else src.with_name(src.stem + "_ja.mp4")
     w, h, dur = probe(src)
     work = dst.with_suffix("")
     work.mkdir(parents=True, exist_ok=True)
@@ -65,7 +71,7 @@ def main() -> None:
     f = font(size)
     inputs, filters, truth = [], [], []
     last = "[0:v]"
-    caps = [c for c in CAPTIONS if c[1] <= dur]
+    caps = [c for c in captions if c[1] <= dur]
     for i, (start, end, text, pos) in enumerate(caps, 1):
         x1, y1, x2, y2 = f.getbbox(text, stroke_width=max(2, size // 10))
         tw, th = x2 - x1, y2 - y1
