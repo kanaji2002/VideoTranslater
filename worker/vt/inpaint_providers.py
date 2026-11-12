@@ -2,6 +2,7 @@
 
 INPAINT_PROVIDER で選ぶ:
 - ffmpeg_delogo : 外部 API なしで動く簡易版 (delogo フィルタで周囲から補間)。動作確認用。
+- replicate     : Replicate 上の ProPainter (動画 + マスク動画で背景を補間)。
 - http          : 専用ツールの API。API 仕様が決まったら HttpInpaintProvider を合わせて修正する。
 
 どの実装も「元動画 + 消したい領域 (box と時間) -> 文字を消した動画」という同じ形にしている。
@@ -117,10 +118,74 @@ class HttpInpaintProvider:
         raise TimeoutError(f"inpaint API job {job_id} timed out")
 
 
+class ReplicateProPainterProvider:
+    """Replicate の ProPainter (jd7h/propainter) を呼ぶ。
+
+    認証情報は Secrets Manager (INPAINT_SECRET_ARN) の JSON:
+        {"api_token": "r8_...", "version": "<モデルのバージョンID>",
+         "video_field": "video", "mask_field": "mask"}
+    入力名はモデルの API ページ (https://replicate.com/jd7h/propainter/api) で確認して合わせる。
+    動画とマスクは S3 の署名付き URL で渡す。
+    """
+
+    api = "https://api.replicate.com/v1/predictions"
+    poll_interval = 5
+    timeout_sec = 60 * 60
+
+    def __init__(self) -> None:
+        import boto3
+
+        secret = boto3.client("secretsmanager").get_secret_value(SecretId=os.environ["INPAINT_SECRET_ARN"])
+        self.conf = json.loads(secret["SecretString"])
+        self.headers = {"Authorization": f"Bearer {self.conf['api_token']}"}
+
+    def _presign(self, path: Path, key: str) -> str:
+        import boto3
+
+        s3, bucket = boto3.client("s3"), os.environ["BUCKET"]
+        s3.upload_file(str(path), bucket, key)
+        return s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=7200)
+
+    def remove_text(self, video: Path, regions: list[dict], out: Path, work_dir: Path) -> None:
+        import requests
+
+        mask = make_mask_video(video, regions, work_dir / "mask.mp4")
+        prefix = f"jobs/{os.environ.get('JOB_ID', 'local')}/inpaint"
+        inputs = {
+            self.conf.get("video_field", "video"): self._presign(video, f"{prefix}/video.mp4"),
+            self.conf.get("mask_field", "mask"): self._presign(mask, f"{prefix}/mask.mp4"),
+        }
+        resp = requests.post(self.api, headers=self.headers, json={"version": self.conf["version"], "input": inputs}, timeout=60)
+        resp.raise_for_status()
+        pred = resp.json()
+        deadline = time.time() + self.timeout_sec
+        while pred["status"] not in ("succeeded", "failed", "canceled"):
+            if time.time() > deadline:
+                raise TimeoutError(f"replicate prediction {pred['id']} timed out")
+            time.sleep(self.poll_interval)
+            pred = requests.get(pred["urls"]["get"], headers=self.headers, timeout=60).json()
+        if pred["status"] != "succeeded":
+            raise RuntimeError(f"replicate prediction {pred['status']}: {pred.get('error')}")
+        output = pred["output"]
+        url = output if isinstance(output, str) else output[-1]
+        with requests.get(url, stream=True, timeout=300) as dl:
+            dl.raise_for_status()
+            with open(out, "wb") as f:
+                for chunk in dl.iter_content(1 << 20):
+                    f.write(chunk)
+        # ProPainter は音声を返さないことがあるので、元動画の音声を戻す
+        tmp = out.with_suffix(".noaudio.mp4")
+        out.rename(tmp)
+        media.run(["ffmpeg", "-y", "-i", str(tmp), "-i", str(video), "-map", "0:v", "-map", "1:a?",
+                   "-c:v", "copy", "-c:a", "copy", "-shortest", str(out)])
+
+
 def get_provider(name: str | None = None) -> InpaintProvider:
     name = name or os.environ.get("INPAINT_PROVIDER", "ffmpeg_delogo")
     if name == "ffmpeg_delogo":
         return FfmpegDelogoProvider()
+    if name == "replicate":
+        return ReplicateProPainterProvider()
     if name == "http":
         return HttpInpaintProvider()
     raise ValueError(f"unknown INPAINT_PROVIDER: {name}")

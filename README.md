@@ -52,8 +52,18 @@ npx cdk deploy
 |------|--------|------|
 | `bedrockRegion` | `us-east-1` | Bedrock を呼ぶリージョン |
 | `bedrockModelId` | `anthropic.claude-opus-5-5` | 翻訳・確認に使うモデル |
-| `inpaintProvider` | `ffmpeg_delogo` | `http` にすると専用ツール API を使用 |
+| `inpaintProvider` | `ffmpeg_delogo` | `replicate` で ProPainter (Replicate)、`http` で任意の専用ツール API |
 | `maxQaAttempts` | `2` | QA NG 時の再試行回数 |
+
+### 文字除去に ProPainter (Replicate) を使う
+
+`inpaintProvider` を `replicate` にして再デプロイし、`InpaintSecretArn` に次を入れます
+(バージョン ID と入力名は https://replicate.com/jd7h/propainter/api で確認)。
+
+```bash
+aws secretsmanager put-secret-value --secret-id <InpaintSecretArn> \
+  --secret-string '{"api_token":"r8_...","version":"<version id>","video_field":"video","mask_field":"mask"}'
+```
 
 ### 専用ツール API の設定
 
