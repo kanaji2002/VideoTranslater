@@ -1,0 +1,9 @@
+{
+  "app": "python3 app.py",
+  "context": {
+    "bedrockRegion": "us-east-1",
+    "bedrockModelId": "anthropic.claude-opus-5-5",
+    "inpaintProvider": "ffmpeg_delogo",
+    "maxQaAttempts": 2
+  }
+}
