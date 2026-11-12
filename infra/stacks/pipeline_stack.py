@@ -4,7 +4,9 @@ from aws_cdk import (
     CfnOutput,
     Duration,
     RemovalPolicy,
+    Size,
     Stack,
+    aws_batch as batch,
     aws_dynamodb as ddb,
     aws_ec2 as ec2,
     aws_ecs as ecs,
@@ -202,7 +204,10 @@ class VideoTranslatePipelineStack(Stack):
         extract = worker_step("extract")
         ocr = worker_step("ocr", timeout_min=60)
         translate = worker_step("translate")
-        inpaint = worker_step("inpaint", timeout_min=90)
+        if inpaint_provider == "propainter_local":
+            inpaint = self._gpu_inpaint_step(vpc, bucket, jobs_table)
+        else:
+            inpaint = worker_step("inpaint", timeout_min=90)
         compose = worker_step("compose")
         qa = worker_step("qa")
         publish_ok = worker_step("publish", {"PUBLISH_STATUS": "approved"}, state_id="PublishApproved")
@@ -288,3 +293,75 @@ class VideoTranslatePipelineStack(Stack):
         CfnOutput(self, "JobsTableName", value=jobs_table.table_name)
         CfnOutput(self, "InpaintSecretArn", value=inpaint_secret.secret_arn)
         CfnOutput(self, "NotifyTopicArn", value=notify_topic.topic_arn)
+
+    def _gpu_inpaint_step(self, vpc: ec2.IVpc, bucket: s3.IBucket, jobs_table: ddb.ITable) -> sfn.IChainable:
+        """工程④ を AWS Batch の GPU インスタンスで ProPainter 実行する。
+
+        ジョブが無いときはインスタンス 0 台 (課金なし)。ジョブが来たら起動し、終われば自動で止まる。
+        """
+        instance_types = self.node.try_get_context("gpuInstanceTypes") or ["g6.xlarge", "g5.xlarge"]
+        compute_env = batch.ManagedEc2EcsComputeEnvironment(
+            self,
+            "GpuComputeEnv",
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+            instance_types=[ec2.InstanceType(t) for t in instance_types],
+            use_optimal_instance_classes=False,
+            images=[batch.EcsMachineImage(image_type=batch.EcsMachineImageType.ECS_AL2_NVIDIA)],
+            minv_cpus=0,
+            maxv_cpus=int(self.node.try_get_context("gpuMaxVcpus") or 8),
+            spot=bool(self.node.try_get_context("gpuSpot")),
+        )
+        queue = batch.JobQueue(self, "GpuQueue", compute_environments=[
+            batch.OrderedComputeEnvironment(compute_environment=compute_env, order=1)
+        ])
+
+        job_role = iam.Role(self, "GpuJobRole", assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"))
+        bucket.grant_read_write(job_role)
+        jobs_table.grant_read_write_data(job_role)
+
+        job_def = batch.EcsJobDefinition(
+            self,
+            "GpuInpaintJob",
+            timeout=Duration.minutes(90),
+            container=batch.EcsEc2ContainerDefinition(
+                self,
+                "GpuInpaintContainer",
+                image=ecs.ContainerImage.from_asset(
+                    "..",
+                    file="gpu-worker/Dockerfile",
+                    exclude=["**/cdk.out", "**/.git", "docs", "infra", "**/__pycache__", "**/.venv"],
+                ),
+                cpu=4,
+                gpu=1,
+                memory=Size.mebibytes(14000),
+                job_role=job_role,
+                logging=ecs.LogDrivers.aws_logs(
+                    stream_prefix="gpu-inpaint", log_retention=logs.RetentionDays.ONE_MONTH
+                ),
+                environment={
+                    "BUCKET": bucket.bucket_name,
+                    "JOBS_TABLE": jobs_table.table_name,
+                    "INPAINT_PROVIDER": "propainter_local",
+                    "PROPAINTER_SUBVIDEO_LENGTH": str(self.node.try_get_context("propainterSubvideoLength") or 50),
+                },
+            ),
+        )
+
+        return tasks.BatchSubmitJob(
+            self,
+            "Inpaint",
+            job_name="inpaint",
+            job_queue_arn=queue.job_queue_arn,
+            job_definition_arn=job_def.job_definition_arn,
+            container_overrides=tasks.BatchContainerOverrides(
+                environment={
+                    "STEP": "inpaint",
+                    "JOB_ID": sfn.JsonPath.string_at("$.job_id"),
+                    "INPUT_KEY": sfn.JsonPath.string_at("$.input_key"),
+                    "ATTEMPT": sfn.JsonPath.json_to_string(sfn.JsonPath.number_at("$.attempt")),
+                }
+            ),
+            result_selector={"batch_job_id": sfn.JsonPath.string_at("$.JobId"), "status": sfn.JsonPath.string_at("$.Status")},
+            result_path="$.results.inpaint",
+        ).add_retry(errors=["Batch.AWSBatchException"], max_attempts=2)

@@ -2,6 +2,7 @@
 
 INPAINT_PROVIDER で選ぶ:
 - ffmpeg_delogo : 外部 API なしで動く簡易版 (delogo フィルタで周囲から補間)。動作確認用。
+- propainter_local : 同じコンテナ内の ProPainter を GPU で実行 (AWS Batch の GPU インスタンス用)。
 - replicate     : Replicate 上の ProPainter (動画 + マスク動画で背景を補間)。
 - http          : 専用ツールの API。API 仕様が決まったら HttpInpaintProvider を合わせて修正する。
 
@@ -118,6 +119,92 @@ class HttpInpaintProvider:
         raise TimeoutError(f"inpaint API job {job_id} timed out")
 
 
+def plan_windows(regions: list[dict], fps: float, n_frames: int, size: tuple[int, int],
+                 *, context_sec: float = 2.0, pad_px: int = 48) -> list[dict]:
+    """テロップごとに ProPainter へ渡す範囲 (前後の文脈を含むフレーム範囲 + 周囲を含む切り抜き) を決める。
+
+    動画全体を GPU に載せるとメモリが足りないため、テロップの周辺だけを切り出して処理する。
+    切り抜きは ProPainter の制約に合わせて 8 の倍数にそろえる。
+    """
+    w, h = size
+    out = []
+    for r in regions:
+        f0 = max(0, int((r["start"] - context_sec) * fps))
+        f1 = min(n_frames, int((r["end"] + context_sec) * fps) + 1)
+        x1, y1, x2, y2 = r["box"]
+        cx1, cy1 = max(0, x1 - pad_px), max(0, y1 - pad_px)
+        cx2, cy2 = min(w, x2 + pad_px), min(h, y2 + pad_px)
+        cw, ch = (cx2 - cx1) // 8 * 8, (cy2 - cy1) // 8 * 8
+        if cw < 16 or ch < 16 or f1 - f0 < 2:
+            continue
+        out.append(
+            {
+                "id": r.get("id"),
+                "frames": (f0, f1),
+                "crop": (cx1, cy1, cx1 + cw, cy1 + ch),
+                "mask_frames": (int(r["start"] * fps), int(r["end"] * fps) + 1),
+                "box": (x1, y1, x2, y2),
+            }
+        )
+    return out
+
+
+class ProPainterLocalProvider:
+    """コンテナ内の ProPainter (/opt/ProPainter) を GPU で実行する。gpu-worker イメージで使う。"""
+
+    root = Path(os.environ.get("PROPAINTER_ROOT", "/opt/ProPainter"))
+
+    def remove_text(self, video: Path, regions: list[dict], out: Path, work_dir: Path) -> None:
+        import shutil
+        import subprocess
+        import sys
+
+        from PIL import Image, ImageDraw
+
+        info = media.probe(video)
+        frames_dir = work_dir / "frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        media.run(["ffmpeg", "-y", "-i", str(video), "-vsync", "0", str(frames_dir / "%06d.png")])
+        files = sorted(frames_dir.glob("*.png"))
+        fps = info["fps"]
+
+        for i, win in enumerate(plan_windows(regions, fps, len(files), (info["width"], info["height"]))):
+            f0, f1 = win["frames"]
+            m0, m1 = win["mask_frames"]
+            cx1, cy1, cx2, cy2 = win["crop"]
+            bx1, by1, bx2, by2 = win["box"]
+            job = work_dir / f"win{i:03d}"
+            shutil.rmtree(job, ignore_errors=True)
+            (job / "in").mkdir(parents=True)
+            (job / "mask").mkdir()
+            for k, f in enumerate(files[f0:f1]):
+                Image.open(f).crop((cx1, cy1, cx2, cy2)).save(job / "in" / f"{k:05d}.png")
+                m = Image.new("L", (cx2 - cx1, cy2 - cy1), 0)
+                if m0 <= f0 + k < m1:
+                    ImageDraw.Draw(m).rectangle((bx1 - cx1, by1 - cy1, bx2 - cx1, by2 - cy1), fill=255)
+                m.save(job / "mask" / f"{k:05d}.png")
+            subprocess.run(
+                [sys.executable, "inference_propainter.py", "-i", str(job / "in"), "-m", str(job / "mask"),
+                 "-o", str(job / "out"), "--save_frames", "--fp16",
+                 "--subvideo_length", os.environ.get("PROPAINTER_SUBVIDEO_LENGTH", "50")],
+                cwd=self.root, check=True,
+            )
+            result = sorted((job / "out" / "in" / "frames").glob("*.png"))
+            # テロップが出ている間のフレームだけ、切り抜き部分を差し戻す
+            for k, rf in enumerate(result):
+                if m0 <= f0 + k < m1:
+                    frame = Image.open(files[f0 + k])
+                    frame.paste(Image.open(rf).convert(frame.mode), (cx1, cy1))
+                    frame.save(files[f0 + k])
+            shutil.rmtree(job, ignore_errors=True)
+
+        media.run(
+            ["ffmpeg", "-y", "-framerate", f"{fps:.6f}", "-i", str(frames_dir / "%06d.png"), "-i", str(video),
+             "-map", "0:v", "-map", "1:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+             "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest", str(out)]
+        )
+
+
 class ReplicateProPainterProvider:
     """Replicate の ProPainter (jd7h/propainter) を呼ぶ。
 
@@ -184,6 +271,8 @@ def get_provider(name: str | None = None) -> InpaintProvider:
     name = name or os.environ.get("INPAINT_PROVIDER", "ffmpeg_delogo")
     if name == "ffmpeg_delogo":
         return FfmpegDelogoProvider()
+    if name == "propainter_local":
+        return ProPainterLocalProvider()
     if name == "replicate":
         return ReplicateProPainterProvider()
     if name == "http":

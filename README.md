@@ -26,6 +26,7 @@ Amazon Rekognition / Textract は日本語の文字認識に対応していな�
 ```
 infra/     AWS CDK (Python) — S3, EventBridge, Step Functions, ECS Fargate, DynamoDB, SNS, Secrets Manager
 worker/    全工程を実行するコンテナ (STEP 環境変数で工程を切り替え)
+gpu-worker/ 工程④ を GPU (AWS Batch) で ProPainter 実行するコンテナ
   vt/steps/        各工程の実装
   vt/segments.py   OCR 結果をテロップ区間にまとめるロジック
   vt/render.py     英文を枠に収めて画像化
@@ -52,8 +53,21 @@ npx cdk deploy
 |------|--------|------|
 | `bedrockRegion` | `us-east-1` | Bedrock を呼ぶリージョン |
 | `bedrockModelId` | `anthropic.claude-opus-5-5` | 翻訳・確認に使うモデル |
-| `inpaintProvider` | `ffmpeg_delogo` | `replicate` で ProPainter (Replicate)、`http` で任意の専用ツール API |
+| `inpaintProvider` | `ffmpeg_delogo` | `propainter_local` で AWS Batch + GPU の ProPainter、`replicate` で ProPainter (Replicate)、`http` で任意の専用ツール API |
 | `maxQaAttempts` | `2` | QA NG 時の再試行回数 |
+
+### 文字除去に ProPainter を AWS Batch + GPU で使う (おすすめ)
+
+```bash
+cdk deploy -c inpaintProvider=propainter_local
+```
+
+- 工程④だけ AWS Batch の GPU インスタンス (g6.xlarge / g5.xlarge) で動きます。ジョブが無いときは 0 台で課金されません。
+- 先に Service Quotas で「Running On-Demand G and VT instances」を 8 vCPU 以上に引き上げてください (初期値 0 のアカウントがあります)。
+- 動画全体ではなくテロップの周り (前後 2 秒) だけを切り出して処理するので、GPU メモリ 24GB で 1 分の動画に収まる想定です。
+- 調整用 context: `gpuInstanceTypes` (既定 `["g6.xlarge","g5.xlarge"]`)、`gpuMaxVcpus` (既定 8)、`gpuSpot` (true でスポット、約 6〜7 割引)、`propainterSubvideoLength` (GPU メモリ不足時に小さく)。
+- ProPainter は S-Lab License (非商用)。商用で使う場合は著作者の許諾が必要です。
+- GPU イメージは約 10GB あり、初回の `cdk deploy` はビルドと push に時間がかかります。
 
 ### 文字除去に ProPainter (Replicate) を使う
 
