@@ -3,6 +3,8 @@
   "context": {
     "bedrockRegion": "us-east-1",
     "bedrockModelId": "anthropic.claude-sonnet-5-5",
+    "llmProvider": "anthropic",
+    "anthropicModelId": "claude-opus-5-5",
     "inpaintProvider": "replicate",
     "maxQaAttempts": 2,
     "translatePromptId": "",

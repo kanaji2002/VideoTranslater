@@ -1,4 +1,9 @@
-"""Amazon Bedrock 上の Claude 呼び出し (Anthropic SDK の Bedrock Mantle クライアント)。"""
+"""Claude 呼び出し。
+
+LLM_PROVIDER で経路を選ぶ:
+  bedrock   (既定) Amazon Bedrock 上の Claude (Anthropic SDK の Bedrock Mantle クライアント)
+  anthropic         Anthropic API を直接呼ぶ。API キーは Secrets Manager (ANTHROPIC_SECRET_ARN) から読む
+"""
 
 from __future__ import annotations
 
@@ -14,14 +19,35 @@ class LLMRefusal(RuntimeError):
     pass
 
 
+def provider() -> str:
+    return os.environ.get("LLM_PROVIDER", "bedrock").strip().lower()
+
+
+def _anthropic_api_key() -> str:
+    """Secrets Manager の値を読む。JSON {"api_key": "sk-ant-..."} でも、キーの文字列そのままでもよい。"""
+    import boto3
+
+    raw = boto3.client("secretsmanager").get_secret_value(SecretId=os.environ["ANTHROPIC_SECRET_ARN"])["SecretString"]
+    raw = raw.strip()
+    if raw.startswith("{"):
+        return json.loads(raw)["api_key"]
+    return raw
+
+
 @lru_cache(maxsize=1)
 def _client():
+    if provider() == "anthropic":
+        from anthropic import Anthropic
+
+        return Anthropic(api_key=_anthropic_api_key())
     from anthropic import AnthropicBedrockMantle
 
     return AnthropicBedrockMantle(aws_region=os.environ.get("BEDROCK_REGION", "us-east-1"))
 
 
 def model_id() -> str:
+    if provider() == "anthropic":
+        return os.environ.get("ANTHROPIC_MODEL_ID", "claude-opus-5-5")
     return os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-opus-5-5")
 
 
