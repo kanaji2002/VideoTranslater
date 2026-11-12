@@ -243,7 +243,9 @@ class ReplicateProPainterProvider:
             self.conf.get("mask_field", "mask"): self._presign(mask, f"{prefix}/mask.mp4"),
         }
         resp = requests.post(self.api, headers=self.headers, json={"version": self.conf["version"], "input": inputs}, timeout=60)
-        resp.raise_for_status()
+        if not resp.ok:
+            # 402 (残高・支払い) や 422 (入力・バージョン違い) の理由は本文に入っているので、エラーに含める
+            raise RuntimeError(f"replicate {resp.status_code}: {resp.text[:500]}")
         pred = resp.json()
         deadline = time.time() + self.timeout_sec
         while pred["status"] not in ("succeeded", "failed", "canceled"):
