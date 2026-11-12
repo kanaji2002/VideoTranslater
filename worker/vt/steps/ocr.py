@@ -10,7 +10,7 @@ import tarfile
 from functools import lru_cache
 
 from ..context import JobContext
-from ..segments import Detection, build_segments
+from ..segments import Detection, build_segments, merge_lines
 
 
 @lru_cache(maxsize=1)
@@ -38,11 +38,11 @@ def run(ctx: JobContext) -> dict:
         tar.extractall(frames_dir, filter="data")
 
     per_frame = [(f["t"], detect(str(frames_dir / f["file"]))) for f in meta["frames"]]
-    segments = build_segments(
+    segments = merge_lines(build_segments(
         per_frame,
         frame_interval=1.0 / meta["sample_fps"],
         frame_size=(meta["width"], meta["height"]),
-    )
+    ))
     ctx.write_json("ocr.json", {"width": meta["width"], "height": meta["height"], "segments": segments})
     ctx.set_status("ocr_done", ja_texts=[s["ja"] for s in segments], segment_count=len(segments))
     return {"segments": len(segments)}

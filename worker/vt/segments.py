@@ -129,3 +129,65 @@ def build_segments(
             }
         )
     return out
+
+
+def _same_line(a: dict, b: dict) -> bool:
+    """同じ行のテロップの断片か (縦位置がほぼ同じ・時間が重なる・横に離れすぎていない)。"""
+    ax1, ay1, ax2, ay2 = a["box"]
+    bx1, by1, bx2, by2 = b["box"]
+    v_overlap = min(ay2, by2) - max(ay1, by1)
+    if v_overlap < 0.5 * min(ay2 - ay1, by2 - by1):
+        return False
+    if min(a["end"], b["end"]) <= max(a["start"], b["start"]):
+        return False
+    gap = max(ax1, bx1) - min(ax2, bx2)  # 負なら横に重なっている
+    return gap <= 1.5 * max(ay2 - ay1, by2 - by1)
+
+
+def _join_text(a: dict, b: dict) -> str:
+    ta, tb = a["ja"], b["ja"]
+    if ta in tb or similar(ta, tb) >= 0.6 and len(tb) >= len(ta):
+        return tb
+    if tb in ta or similar(ta, tb) >= 0.6:
+        return ta
+    # 別々の断片なら、左にあるものから順につなぐ
+    ca, cb = (a["box"][0] + a["box"][2]) / 2, (b["box"][0] + b["box"][2]) / 2
+    return ta + tb if ca <= cb else tb + ta
+
+
+def merge_lines(segments: list[dict]) -> list[dict]:
+    """OCR が 1 行のテロップを複数に分けて読んだもの (「ふわふわ」「手作り」「フォカッチャ」や、
+    一部だけ読めた短い区間) を 1 つの区間にまとめる。まとめた区間は枠・時間とも和集合にする。"""
+    segs = [dict(s) for s in segments]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(segs)):
+            for j in range(i + 1, len(segs)):
+                a, b = segs[i], segs[j]
+                if not _same_line(a, b):
+                    continue
+                segs[i] = {
+                    **a,
+                    "ja": _join_text(a, b),
+                    "box": [min(a["box"][0], b["box"][0]), min(a["box"][1], b["box"][1]),
+                            max(a["box"][2], b["box"][2]), max(a["box"][3], b["box"][3])],
+                    "start": min(a["start"], b["start"]),
+                    "end": max(a["end"], b["end"]),
+                    "samples": a.get("samples", 0) + b.get("samples", 0),
+                }
+                del segs[j]
+                changed = True
+                break
+            if changed:
+                break
+    segs.sort(key=lambda s: (s["start"], s["box"][1]))
+    for n, s in enumerate(segs, 1):
+        s["id"] = f"s{n:03d}"
+    return segs
+
+
+def in_caption_band(box: list[int], frame_h: int, *, top: float = 0.25, bottom: float = 0.70) -> bool:
+    """テロップが入りやすい画面の上端・下端の帯にあるか。"""
+    cy = (box[1] + box[3]) / 2
+    return cy <= frame_h * top or cy >= frame_h * bottom
