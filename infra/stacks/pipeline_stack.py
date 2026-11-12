@@ -9,6 +9,7 @@ from aws_cdk import (
     aws_batch as batch,
     aws_dynamodb as ddb,
     aws_ec2 as ec2,
+    aws_ecr_assets as ecr_assets,
     aws_ecs as ecs,
     aws_events as events,
     aws_events_targets as targets,
@@ -92,7 +93,7 @@ class VideoTranslatePipelineStack(Stack):
         )
         container = task_def.add_container(
             "worker",
-            image=ecs.ContainerImage.from_asset("../worker"),
+            image=ecs.ContainerImage.from_asset("../worker", platform=ecr_assets.Platform.LINUX_AMD64),
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="worker", log_retention=logs.RetentionDays.ONE_MONTH
             ),
@@ -330,6 +331,7 @@ class VideoTranslatePipelineStack(Stack):
                 image=ecs.ContainerImage.from_asset(
                     "..",
                     file="gpu-worker/Dockerfile",
+                    platform=ecr_assets.Platform.LINUX_AMD64,  # M1/M2 Mac でも x86 用にビルド
                     exclude=["**/cdk.out", "**/.git", "docs", "infra", "**/__pycache__", "**/.venv"],
                 ),
                 cpu=4,
