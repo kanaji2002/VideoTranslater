@@ -32,7 +32,7 @@ class VideoTranslatePipelineStack(Stack):
 
         bedrock_region = self.node.try_get_context("bedrockRegion") or "us-east-1"
         bedrock_model_id = self.node.try_get_context("bedrockModelId") or "anthropic.claude-opus-5-5"
-        inpaint_provider = self.node.try_get_context("inpaintProvider") or "ffmpeg_delogo"
+        inpaint_provider = self.node.try_get_context("inpaintProvider") or "propainter_local"
         max_qa_attempts = int(self.node.try_get_context("maxQaAttempts") or 2)
 
         # ---------- Storage ----------
