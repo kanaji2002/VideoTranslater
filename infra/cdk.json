@@ -3,6 +3,9 @@
   "context": {
     "bedrockRegion": "us-east-1",
     "bedrockModelId": "anthropic.claude-sonnet-5-5",
+    "llmProvider": "converse",
+    "converseModelId": "us.amazon.nova-2-lite-v1:0",
+    "anthropicModelId": "claude-opus-5-5",
     "inpaintProvider": "replicate",
     "maxQaAttempts": 2,
     "translatePromptId": "",

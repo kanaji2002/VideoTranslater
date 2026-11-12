@@ -33,6 +33,11 @@ class VideoTranslatePipelineStack(Stack):
         bedrock_region = self.node.try_get_context("bedrockRegion") or "us-east-1"
         bedrock_model_id = self.node.try_get_context("bedrockModelId") or "anthropic.claude-opus-5-5"
         inpaint_provider = self.node.try_get_context("inpaintProvider") or "propainter_local"
+        # LLM の呼び出し経路: "bedrock" (Bedrock の Claude) / "anthropic" (Anthropic API を直接) /
+        # "converse" (Bedrock の Converse API で Nova など Claude 以外のモデル)
+        llm_provider = self.node.try_get_context("llmProvider") or "bedrock"
+        converse_model_id = self.node.try_get_context("converseModelId") or "us.amazon.nova-2-lite-v1:0"
+        anthropic_model_id = self.node.try_get_context("anthropicModelId") or "claude-opus-5-5"
         max_qa_attempts = int(self.node.try_get_context("maxQaAttempts") or 2)
 
         # ---------- Storage ----------
@@ -62,6 +67,13 @@ class VideoTranslatePipelineStack(Stack):
             self,
             "InpaintApiSecret",
             description="文字除去/インペイント API の認証情報 (JSON: {\"api_key\": \"...\", \"endpoint\": \"...\"})",
+        )
+
+        # llmProvider=anthropic のときに使う Anthropic API キー。デプロイ後にコンソールで値を入れる
+        anthropic_secret = secretsmanager.Secret(
+            self,
+            "AnthropicApiSecret",
+            description="Anthropic API キー (JSON: {\"api_key\": \"sk-ant-...\"})",
         )
 
         notify_topic = sns.Topic(self, "NotifyTopic", display_name="VideoTranslate notifications")
@@ -102,6 +114,10 @@ class VideoTranslatePipelineStack(Stack):
                 "JOBS_TABLE": jobs_table.table_name,
                 "BEDROCK_REGION": bedrock_region,
                 "BEDROCK_MODEL_ID": bedrock_model_id,
+                "LLM_PROVIDER": llm_provider,
+                "ANTHROPIC_MODEL_ID": anthropic_model_id,
+                "CONVERSE_MODEL_ID": converse_model_id,
+                "ANTHROPIC_SECRET_ARN": anthropic_secret.secret_arn,
                 "INPAINT_PROVIDER": inpaint_provider,
                 "INPAINT_SECRET_ARN": inpaint_secret.secret_arn,
                 # Bedrock プロンプト管理のプロンプト ("ID" か "ID:バージョン")。空ならコード内のプロンプト
@@ -113,6 +129,7 @@ class VideoTranslatePipelineStack(Stack):
         bucket.grant_read_write(task_def.task_role)
         jobs_table.grant_read_write_data(task_def.task_role)
         inpaint_secret.grant_read(task_def.task_role)
+        anthropic_secret.grant_read(task_def.task_role)
         task_def.task_role.add_to_principal_policy(
             iam.PolicyStatement(
                 # Bedrock (Mantle エンドポイント経由の Messages API)。
@@ -293,6 +310,7 @@ class VideoTranslatePipelineStack(Stack):
         CfnOutput(self, "StateMachineArn", value=state_machine.state_machine_arn)
         CfnOutput(self, "JobsTableName", value=jobs_table.table_name)
         CfnOutput(self, "InpaintSecretArn", value=inpaint_secret.secret_arn)
+        CfnOutput(self, "AnthropicSecretArn", value=anthropic_secret.secret_arn)
         CfnOutput(self, "NotifyTopicArn", value=notify_topic.topic_arn)
 
     def _gpu_inpaint_step(self, vpc: ec2.IVpc, bucket: s3.IBucket, jobs_table: ddb.ITable) -> sfn.IChainable:
