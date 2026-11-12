@@ -1,4 +1,4 @@
-from vt.segments import Detection, build_segments, has_japanese, iou
+from vt.segments import Detection, build_segments, has_japanese, in_caption_band, iou, merge_lines
 
 
 def test_has_japanese():
@@ -34,3 +34,44 @@ def test_groups_same_caption_across_frames_and_tolerates_ocr_noise():
 def test_ignores_non_japanese_and_low_score():
     frames = [(0.5, [Detection("ABC", (0, 0, 10, 10), 0.99), Detection("にんじん", (0, 0, 50, 20), 0.3)])]
     assert build_segments(frames, frame_interval=0.5) == []
+
+
+def _seg(ja, box, start, end):
+    return {"id": "x", "ja": ja, "box": list(box), "start": start, "end": end}
+
+
+def test_merge_split_line_fragments_in_reading_order():
+    segs = merge_lines([
+        _seg("ふわふわ", (160, 14, 264, 52), 0.5, 4.0),
+        _seg("オカツチヤ", (353, 14, 472, 53), 0.5, 4.0),
+        _seg("手作り", (269, 16, 348, 51), 0.5, 4.0),
+        _seg("強力粉300gにドライイースト3gを加えます", (108, 299, 529, 337), 1.0, 6.0),
+    ])
+    assert [s["ja"] for s in segs] == ["ふわふわ手作りオカツチヤ", "強力粉300gにドライイースト3gを加えます"]
+    assert segs[0]["box"] == [160, 14, 472, 53]
+
+
+def test_merge_partial_reads_keep_full_text():
+    segs = merge_lines([
+        _seg("ドライイースト3gを加えます", (246, 299, 529, 335), 1.0, 1.5),
+        _seg("強力粉300gにドライイースト3gを加えます", (108, 299, 529, 337), 1.0, 6.0),
+        _seg("ト3gを加えます", (368, 299, 528, 335), 2.0, 3.5),
+        _seg("ぬる", (120, 303, 182, 334), 6.5, 11.0),
+        _seg("ま湯200m1とオリーブオイル大さじ2", (118, 300, 522, 338), 7.5, 11.0),
+    ])
+    assert [s["ja"] for s in segs] == ["強力粉300gにドライイースト3gを加えます", "ぬるま湯200m1とオリーブオイル大さじ2"]
+    assert (segs[0]["start"], segs[0]["end"]) == (1.0, 6.0)
+
+
+def test_consecutive_captions_at_same_place_stay_separate():
+    segs = merge_lines([
+        _seg("丸くまとめて表面を張らせます", (163, 297, 473, 339), 22.5, 28.0),
+        _seg("ラップをして30分発酵させる", (174, 296, 465, 344), 28.5, 34.0),
+    ])
+    assert len(segs) == 2
+
+
+def test_caption_band():
+    assert in_caption_band([160, 14, 472, 53], 360)
+    assert in_caption_band([108, 299, 529, 337], 360)
+    assert not in_caption_band([200, 150, 300, 190], 360)

@@ -15,6 +15,7 @@ from PIL import Image
 
 from .. import llm
 from ..context import JobContext
+from ..segments import in_caption_band
 
 MAX_IMAGES = int(os.environ.get("TRANSLATE_MAX_IMAGES", "40"))
 
@@ -123,7 +124,11 @@ def run(ctx: JobContext) -> dict:
         tr = by_id.get(seg["id"])
         if tr is None:
             raise RuntimeError(f"翻訳結果に {seg['id']} がありません")
-        merged.append({**seg, **tr, "max_chars": max_chars(seg["box"])})
+        item = {**seg, **tr, "max_chars": max_chars(seg["box"])}
+        # 画面の上端・下端の帯にある文字はテロップとして扱う (モデルの is_overlay 判定は外れることがあるため)
+        if ocr.get("height") and in_caption_band(seg["box"], ocr["height"]):
+            item["is_overlay"] = True
+        merged.append(item)
 
     ctx.write_json("translation.json", {"attempt": ctx.attempt, "segments": merged})
     ctx.set_status("translated", en_texts=[s["en"] for s in merged])
