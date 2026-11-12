@@ -33,8 +33,10 @@ class VideoTranslatePipelineStack(Stack):
         bedrock_region = self.node.try_get_context("bedrockRegion") or "us-east-1"
         bedrock_model_id = self.node.try_get_context("bedrockModelId") or "anthropic.claude-opus-5-5"
         inpaint_provider = self.node.try_get_context("inpaintProvider") or "propainter_local"
-        # Claude の呼び出し経路: "bedrock" か "anthropic" (Anthropic API を直接)
+        # LLM の呼び出し経路: "bedrock" (Bedrock の Claude) / "anthropic" (Anthropic API を直接) /
+        # "converse" (Bedrock の Converse API で Nova など Claude 以外のモデル)
         llm_provider = self.node.try_get_context("llmProvider") or "bedrock"
+        converse_model_id = self.node.try_get_context("converseModelId") or "us.amazon.nova-2-lite-v1:0"
         anthropic_model_id = self.node.try_get_context("anthropicModelId") or "claude-opus-5-5"
         max_qa_attempts = int(self.node.try_get_context("maxQaAttempts") or 2)
 
@@ -114,6 +116,7 @@ class VideoTranslatePipelineStack(Stack):
                 "BEDROCK_MODEL_ID": bedrock_model_id,
                 "LLM_PROVIDER": llm_provider,
                 "ANTHROPIC_MODEL_ID": anthropic_model_id,
+                "CONVERSE_MODEL_ID": converse_model_id,
                 "ANTHROPIC_SECRET_ARN": anthropic_secret.secret_arn,
                 "INPAINT_PROVIDER": inpaint_provider,
                 "INPAINT_SECRET_ARN": inpaint_secret.secret_arn,
