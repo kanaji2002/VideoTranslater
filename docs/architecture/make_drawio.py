@@ -79,38 +79,61 @@ AWS_CLOUD = (
 )
 BOX = "rounded=1;arcSize=3;html=1;fillColor={f};strokeColor={s};verticalAlign=top;align=left;spacingLeft=10;fontSize=12;dashed={d};"
 
+def note(text: str, x: int, y: int, w: int, h: int) -> str:
+    i = nid()
+    style = "text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=12;fontColor=#232F3E;"
+    cells.append(
+        f'<mxCell id="{i}" value="{escape(text)}" style="{style}" vertex="1" parent="1">'
+        f'<mxGeometry x="{x}" y="{y}" width="{w}" height="{h}" as="geometry"/></mxCell>'
+    )
+    return i
+
+
 # ---- groups ----
-group("AWS Cloud", 160, -20, 1500, 700, AWS_CLOUD)
-group("Step Functions ワークフロー / ECS on Fargate ワーカー", 440, 90, 980, 300, BOX.format(f="#FFF8F0", s="#ED7100", d=1))
+group("AWS Cloud (us-east-1)", 160, -20, 1500, 720, AWS_CLOUD)
+fargate = group("ECS on Fargate ワーカー (1つのイメージ / STEP で切替)", 440, 90, 460, 300, BOX.format(f="#FFF8F0", s="#ED7100", d=1))
+gpu = group("AWS Batch GPU (g6/g5, 待機中は0台)\n※GPU 枠の承認後に使用", 940, 90, 220, 190, BOX.format(f="#FFF8F0", s="#ED7100", d=1))
 group("保存・状態", 1450, 90, 180, 560, BOX.format(f="#F2FBF4", s="#3F8624", d=0))
 
 # ---- nodes ----
 user = plain_icon("利用者", "user", 40, 300)
 s3_in = icon("S3\ninput/*.mp4", "simple_storage_service", STORAGE, 200, 300)
 eb = icon("EventBridge\nObject Created", "eventbridge", INTEG, 300, 300)
-sfn = icon("Step Functions", "step_functions", INTEG, 300, 450)
+sfn = icon("Step Functions\nワークフロー", "step_functions", INTEG, 300, 450)
 
 y1, y2 = 140, 280
 extract = icon("① フレーム抽出\n(ffmpeg)", "fargate", COMPUTE, 480, y1)
 ocr = icon("② 日本語OCR\n(PaddleOCR)", "fargate", COMPUTE, 640, y1)
 translate = icon("③ OCR補正+英訳\n(食材ルール適用)", "fargate", COMPUTE, 800, y1)
-inpaint = icon("④ 日本語テロップ除去", "fargate", COMPUTE, 960, y1)
-compose = icon("⑤ 英語テキスト合成\n(ffmpeg+Pillow)", "fargate", COMPUTE, 960, y2)
-qa = icon("⑥ エージェント確認", "fargate", COMPUTE, 800, y2)
-publish = icon("⑦ 保存", "fargate", COMPUTE, 1300, y2)
+inpaint = icon("④ 日本語テロップ除去\nProPainter", "batch", COMPUTE, 1018, 160)
+compose = icon("⑤ 英語テキスト合成\n(ffmpeg+Pillow)", "fargate", COMPUTE, 800, y2)
+qa = icon("⑥ 確認エージェント\n(Claude が完成フレームを判定)", "fargate", COMPUTE, 640, y2)
+publish = icon("⑦ 保存", "fargate", COMPUTE, 480, y2)
 
-bedrock = icon("Amazon Bedrock\n(Claude)", "bedrock", ML, 800, 470)
-secrets = icon("Secrets Manager\nAPIキー", "secrets_manager", SEC, 1120, 470)
-sns = icon("SNS\n完了・失敗通知", "sns", INTEG, 300, 580)
-logs = icon("CloudWatch Logs", "cloudwatch_2", MGMT, 480, 470)
-ecr = icon("ECR\nワーカーイメージ", "ecr", COMPUTE, 640, 470)
+bedrock = icon("Amazon Bedrock\nClaude Sonnet 5.5\n(③ 補正・英訳 / ⑥ 確認)", "bedrock", ML, 640, 470)
+logs = icon("CloudWatch Logs", "cloudwatch_2", MGMT, 820, 470)
+ecr = icon("ECR\nコンテナイメージ\n(通常用 / GPU用)", "ecr", COMPUTE, 1018, 470)
+secrets = icon("Secrets Manager\nReplicate の API キー", "secrets_manager", SEC, 1260, 160)
+sns = icon("SNS\n完了・失敗通知", "sns", INTEG, 300, 590)
 
 s3_jobs = icon("S3 jobs/{id}/\nocr.json ほか", "simple_storage_service", STORAGE, 1508, 140)
 ddb = icon("DynamoDB\nジョブ状態", "dynamodb", DB, 1508, 330)
 s3_out = icon("S3 output/\n(NG時 review/)", "simple_storage_service", STORAGE, 1508, 520)
+rules = icon("S3 rules/\n食材ルールリスト", "simple_storage_service", STORAGE, 800, -10)
 
-rules = icon("S3 rules/\n食材ルールリスト", "simple_storage_service", STORAGE, 800, 0)
-api = plain_icon("文字除去 / インペイント API\n(外部サービス)", "internet_alt1", 1720, 140)
+replicate = plain_icon("Replicate\nProPainter API\n(GPU 承認までの代替)", "internet_alt1", 1018, -190)
+gha = group("GitHub Actions\nイメージのビルド + cdk deploy", 960, 760, 180, 60,
+            "rounded=1;html=1;whiteSpace=wrap;fillColor=#24292F;strokeColor=none;fontColor=#FFFFFF;fontSize=12;align=center;verticalAlign=middle;")
+
+note(
+    "使用しているエージェント / AI\n"
+    "・③ OCR補正+英訳: Claude Sonnet 5.5 (Amazon Bedrock)。切り抜き画像と食材ルールを渡す\n"
+    "・⑥ 確認エージェント: Claude Sonnet 5.5 (Amazon Bedrock)。完成フレームを見て合否と指摘を返し、NG なら③からやり直し (最大2回)\n"
+    "・② OCR: PaddleOCR (日本語モデル、コンテナ内で実行)\n"
+    "・④ 文字消し: ProPainter。現在は Replicate、GPU 枠の承認後は AWS Batch に切替 (infra/cdk.json の inpaintProvider)\n"
+    "※ Opus 5.5 はこのアカウントで使えないため、当面 Sonnet 5.5 (infra/cdk.json の bedrockModelId)",
+    160, 860, 1100, 120,
+)
 
 # ---- edges ----
 edge(user, s3_in, "1分動画をアップロード")
@@ -127,18 +150,22 @@ edge(qa, translate, "NG: 再翻訳 (最大2回)", color="#D13212", dashed=True)
 edge(rules, translate, "代用品ルールを参照", color="#7AA116")
 edge(translate, bedrock, dashed=True)
 edge(qa, bedrock, "フレーム画像で確認", dashed=True)
-edge(inpaint, api, "HTTPS", color="#ED7100")
+edge(inpaint, replicate, "HTTPS (現在)", color="#ED7100")
 edge(inpaint, secrets, dashed=True)
 edge(ocr, s3_jobs, "日本語テキスト保存", dashed=True)
 edge(publish, ddb, dashed=True)
 edge(publish, s3_out)
 edge(sfn, sns, "結果", dashed=True)
 edge(sns, user, "メール等")
+edge(gha, ecr, "push", color="#232F3E")
+edge(ecr, fargate, "pull", color="#AAB7B8", dashed=True)
+edge(ecr, gpu, "pull", color="#AAB7B8", dashed=True)
+edge(fargate, logs, color="#AAB7B8", dashed=True)
 
 xml = (
     '<mxfile host="app.diagrams.net"><diagram id="vt" name="動画テロップ翻訳パイプライン">'
     '<mxGraphModel dx="1800" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" '
-    'fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="760" math="0" shadow="0"><root>'
+    'fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1000" math="0" shadow="0"><root>'
     '<mxCell id="0"/><mxCell id="1" parent="0"/>' + "".join(cells) + "</root></mxGraphModel></diagram></mxfile>"
 )
 OUT.write_text(xml.replace("\n", "&#xa;"), encoding="utf-8")
