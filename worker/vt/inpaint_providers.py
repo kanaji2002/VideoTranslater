@@ -328,7 +328,17 @@ class ReplicateProPainterProvider:
         import requests
 
         inputs = {self.conf.get("video_field", "video"): video_url, self.conf.get("mask_field", "mask"): mask_url}
-        resp = requests.post(self.api, headers=self.headers, json={"version": self.conf["version"], "input": inputs}, timeout=60)
+        body = {"version": self.conf["version"], "input": inputs}
+        for attempt in range(30):
+            resp = requests.post(self.api, headers=self.headers, json=body, timeout=60)
+            if resp.status_code != 429:
+                break
+            # 回数制限 (残高 $5 未満だと 1 分 6 回・同時 1 件)。言われた秒数だけ待って送り直す
+            try:
+                wait = float(resp.json().get("retry_after", 10))
+            except ValueError:
+                wait = 10.0
+            time.sleep(min(60.0, wait + 1 + attempt))
         if not resp.ok:
             # 402 (残高・支払い) や 422 (入力・バージョン違い) の理由は本文に入っているので、エラーに含める
             raise RuntimeError(f"replicate {resp.status_code}: {resp.text[:500]}")
