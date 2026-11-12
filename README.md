@@ -53,13 +53,13 @@ npx cdk deploy
 |------|--------|------|
 | `bedrockRegion` | `us-east-1` | Bedrock を呼ぶリージョン |
 | `bedrockModelId` | `anthropic.claude-opus-5-5` | 翻訳・確認に使うモデル |
-| `inpaintProvider` | `ffmpeg_delogo` | `propainter_local` で AWS Batch + GPU の ProPainter、`replicate` で ProPainter (Replicate)、`http` で任意の専用ツール API |
+| `inpaintProvider` | `propainter_local` | AWS Batch + GPU の ProPainter。`ffmpeg_delogo` で GPU なしの簡易版、`replicate` で ProPainter (Replicate)、`http` で任意の専用ツール API |
 | `maxQaAttempts` | `2` | QA NG 時の再試行回数 |
 
 ### 文字除去に ProPainter を AWS Batch + GPU で使う (おすすめ)
 
 ```bash
-cdk deploy -c inpaintProvider=propainter_local
+cdk deploy   # 既定で propainter_local
 ```
 
 - 工程④だけ AWS Batch の GPU インスタンス (g6.xlarge / g5.xlarge) で動きます。ジョブが無いときは 0 台で課金されません。
