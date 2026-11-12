@@ -25,6 +25,22 @@ def model_id() -> str:
     return os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-opus-5-5")
 
 
+def managed_prompt(env_name: str, default: str) -> str:
+    """Bedrock プロンプト管理のプロンプトを使う (環境変数に "ID" か "ID:バージョン" があれば)。
+
+    未設定なら default (コード内のプロンプト) を使う。コンソールで文面を直せば再デプロイ不要。
+    """
+    ref = os.environ.get(env_name, "").strip()
+    if not ref:
+        return default
+    import boto3
+
+    pid, _, version = ref.partition(":") if not ref.startswith("arn:") else (ref, "", "")
+    kwargs = {"promptIdentifier": pid, **({"promptVersion": version} if version else {})}
+    prompt = boto3.client("bedrock-agent", region_name=os.environ.get("BEDROCK_REGION")).get_prompt(**kwargs)
+    return prompt["variants"][0]["templateConfiguration"]["text"]["text"]
+
+
 def image_block(path: Path) -> dict:
     return {
         "type": "image",

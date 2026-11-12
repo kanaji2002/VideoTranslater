@@ -115,7 +115,7 @@ def run(ctx: JobContext) -> dict:
         payload["review_feedback"] = feedback
     content.append({"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)})
 
-    result = llm.ask_json(SYSTEM, content, SCHEMA, effort="medium")
+    result = llm.ask_json(llm.managed_prompt("TRANSLATE_PROMPT_ID", SYSTEM), content, SCHEMA, effort="medium")
     by_id = {s["id"]: s for s in result["segments"]}
 
     merged = []

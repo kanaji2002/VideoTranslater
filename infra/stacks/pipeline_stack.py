@@ -101,6 +101,9 @@ class VideoTranslatePipelineStack(Stack):
                 "BEDROCK_MODEL_ID": bedrock_model_id,
                 "INPAINT_PROVIDER": inpaint_provider,
                 "INPAINT_SECRET_ARN": inpaint_secret.secret_arn,
+                # Bedrock プロンプト管理のプロンプト ("ID" か "ID:バージョン")。空ならコード内のプロンプト
+                "TRANSLATE_PROMPT_ID": self.node.try_get_context("translatePromptId") or "",
+                "QA_PROMPT_ID": self.node.try_get_context("qaPromptId") or "",
             },
         )
 
@@ -115,6 +118,7 @@ class VideoTranslatePipelineStack(Stack):
                     "bedrock:InvokeModel",
                     "bedrock:InvokeModelWithResponseStream",
                     "bedrock-mantle:*",
+                    "bedrock:GetPrompt",
                 ],
                 resources=["*"],
             )

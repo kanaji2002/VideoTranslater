@@ -144,7 +144,7 @@ def run(ctx: JobContext) -> dict:
             ),
         }
     )
-    review = llm.ask_json(SYSTEM, content, SCHEMA, effort="high")
+    review = llm.ask_json(llm.managed_prompt("QA_PROMPT_ID", SYSTEM), content, SCHEMA, effort="high")
 
     all_issues = issues + review["issues"]
     passed = (
