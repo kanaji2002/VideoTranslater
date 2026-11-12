@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+cdk.out/
+.pytest_cache/
+work/
+*.mp4
+!samples/*.mp4
