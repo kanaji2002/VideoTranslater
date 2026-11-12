@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import traceback
+import zlib  # noqa: F401  paddle より先に読み込む (Dockerfile の LD_BIND_NOW を参照)
 
 from .context import JobContext
 from .steps import compose, extract, inpaint, ocr, publish, qa, translate
