@@ -119,34 +119,159 @@ class HttpInpaintProvider:
         raise TimeoutError(f"inpaint API job {job_id} timed out")
 
 
+def _overlaps(a: tuple, b: tuple) -> bool:
+    return a[0] < b[1] and b[0] < a[1]
+
+
 def plan_windows(regions: list[dict], fps: float, n_frames: int, size: tuple[int, int],
-                 *, context_sec: float = 2.0, pad_px: int = 48) -> list[dict]:
+                 *, context_sec: float = 2.0, pad_px: int = 48, max_sec: float = 5.0) -> list[dict]:
     """テロップごとに ProPainter へ渡す範囲 (前後の文脈を含むフレーム範囲 + 周囲を含む切り抜き) を決める。
 
     動画全体を GPU に載せるとメモリが足りないため、テロップの周辺だけを切り出して処理する。
+    同じ時間帯で切り抜きが重なるテロップ (2 行のテロップなど) は 1 つの範囲にまとめる
+    (別々に処理して貼り戻すと、後から貼った方が先に消した文字を元に戻してしまうため)。
+    テロップが続く区間が max_sec より長いときは、数秒ずつに分ける (core = 貼り戻すフレーム範囲)。
     切り抜きは ProPainter の制約に合わせて 8 の倍数にそろえる。
     """
     w, h = size
-    out = []
+    ctx, max_core = int(context_sec * fps), max(1, int(max_sec * fps))
+    groups = []
     for r in regions:
-        f0 = max(0, int((r["start"] - context_sec) * fps))
-        f1 = min(n_frames, int((r["end"] + context_sec) * fps) + 1)
         x1, y1, x2, y2 = r["box"]
-        cx1, cy1 = max(0, x1 - pad_px), max(0, y1 - pad_px)
-        cx2, cy2 = min(w, x2 + pad_px), min(h, y2 + pad_px)
+        groups.append({
+            "ids": [r.get("id")],
+            "frames": (max(0, int((r["start"] - context_sec) * fps)), min(n_frames, int((r["end"] + context_sec) * fps) + 1)),
+            "area": (max(0, x1 - pad_px), max(0, y1 - pad_px), min(w, x2 + pad_px), min(h, y2 + pad_px)),
+            "masks": [((x1, y1, x2, y2), (int(r["start"] * fps), int(r["end"] * fps) + 1))],
+        })
+    merged = True
+    while merged:  # まとめた結果がさらに別の範囲と重なることがあるので、重ならなくなるまで繰り返す
+        merged = False
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                g, o = groups[i], groups[j]
+                ga, oa = g["area"], o["area"]
+                if (_overlaps(g["frames"], o["frames"]) and _overlaps((ga[0], ga[2]), (oa[0], oa[2]))
+                        and _overlaps((ga[1], ga[3]), (oa[1], oa[3]))):
+                    groups[i] = {
+                        "ids": g["ids"] + o["ids"],
+                        "frames": (min(g["frames"][0], o["frames"][0]), max(g["frames"][1], o["frames"][1])),
+                        "area": (min(ga[0], oa[0]), min(ga[1], oa[1]), max(ga[2], oa[2]), max(ga[3], oa[3])),
+                        "masks": g["masks"] + o["masks"],
+                    }
+                    del groups[j]
+                    merged = True
+                    break
+            if merged:
+                break
+
+    out = []
+    for g in sorted(groups, key=lambda g: g["frames"][0]):
+        cx1, cy1, cx2, cy2 = g["area"]
         cw, ch = (cx2 - cx1) // 8 * 8, (cy2 - cy1) // 8 * 8
-        if cw < 16 or ch < 16 or f1 - f0 < 2:
+        m0 = min(m[1][0] for m in g["masks"])
+        m1 = min(n_frames, max(m[1][1] for m in g["masks"]))
+        if cw < 16 or ch < 16 or m1 - m0 < 1:
             continue
-        out.append(
-            {
-                "id": r.get("id"),
-                "frames": (f0, f1),
-                "crop": (cx1, cy1, cx1 + cw, cy1 + ch),
-                "mask_frames": (int(r["start"] * fps), int(r["end"] * fps) + 1),
-                "box": (x1, y1, x2, y2),
-            }
-        )
+        boxes = [m[0] for m in g["masks"]]
+        for c0 in range(m0, m1, max_core):
+            c1 = min(m1, c0 + max_core)
+            f0, f1 = max(0, c0 - ctx), min(n_frames, c1 + ctx)
+            if f1 - f0 < 2:
+                continue
+            out.append(
+                {
+                    "id": ",".join(str(i) for i in g["ids"]),
+                    "frames": (f0, f1),
+                    "core": (c0, c1),
+                    "crop": (cx1, cy1, cx1 + cw, cy1 + ch),
+                    "masks": g["masks"],
+                    "mask_frames": (m0, m1),
+                    "box": (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                            max(b[2] for b in boxes), max(b[3] for b in boxes)),
+                }
+            )
     return out
+
+
+def inpaint_by_windows(video: Path, regions: list[dict], out: Path, work_dir: Path, run_window, *,
+                       parallel: int = 1) -> None:
+    """テロップ周辺の範囲ごとに ProPainter を実行し、結果を元のフレームに貼り戻して動画にする。
+
+    run_window(job_dir, in_dir, mask_dir, fps) は ProPainter の結果フレーム (PNG のパス一覧) を返す。
+    範囲どうしは重ならないので、parallel > 1 なら同時に実行してよい (外部 API 用)。
+    """
+    import shutil
+    from concurrent.futures import ThreadPoolExecutor
+
+    from PIL import Image, ImageDraw
+
+    info = media.probe(video)
+    frames_dir = work_dir / "frames"
+    shutil.rmtree(frames_dir, ignore_errors=True)
+    frames_dir.mkdir(parents=True)
+    media.run(["ffmpeg", "-y", "-i", str(video), "-vsync", "0", str(frames_dir / "%06d.png")])
+    files = sorted(frames_dir.glob("*.png"))
+    fps = info["fps"]
+    windows = plan_windows(regions, fps, len(files), (info["width"], info["height"]))
+
+    def active(win: dict, idx: int) -> list[tuple]:
+        """そのフレームで消す枠。マスクは前後の文脈部分にも付ける (分割の境目で消し方がそろうように)。"""
+        return [box for box, (m0, m1) in win["masks"] if m0 <= idx < m1]
+
+    def pasted(win: dict, idx: int) -> bool:
+        c0, c1 = win["core"]
+        return c0 <= idx < c1 and bool(active(win, idx))
+
+    def prepare(i: int, win: dict) -> Path:
+        f0, f1 = win["frames"]
+        cx1, cy1, cx2, cy2 = win["crop"]
+        job = work_dir / f"win{i:03d}"
+        shutil.rmtree(job, ignore_errors=True)
+        (job / "in").mkdir(parents=True)
+        (job / "mask").mkdir()
+        for k, f in enumerate(files[f0:f1]):
+            Image.open(f).convert("RGB").crop((cx1, cy1, cx2, cy2)).save(job / "in" / f"{k:05d}.png")
+            m = Image.new("L", (cx2 - cx1, cy2 - cy1), 0)
+            for bx1, by1, bx2, by2 in active(win, f0 + k):
+                ImageDraw.Draw(m).rectangle((bx1 - cx1, by1 - cy1, bx2 - cx1, by2 - cy1), fill=255)
+            m.save(job / "mask" / f"{k:05d}.png")
+        return job
+
+    def process(item: tuple[int, dict]) -> tuple[dict, Path, list[Path]]:
+        i, win = item
+        job = prepare(i, win)
+        return win, job, run_window(job, job / "in", job / "mask", fps)
+
+    items = list(enumerate(windows))
+    if parallel > 1:
+        with ThreadPoolExecutor(max_workers=parallel) as pool:
+            results = list(pool.map(process, items))
+    else:
+        results = [process(it) for it in items]
+
+    # テロップが出ている間のフレームだけ、切り抜き部分を差し戻す
+    for win, job, result in results:
+        f0, f1 = win["frames"]
+        cx1, cy1, cx2, cy2 = win["crop"]
+        n = f1 - f0
+        for k in range(n):
+            if not pasted(win, f0 + k) or not result:
+                continue
+            rk = min(len(result) - 1, round(k * len(result) / n))  # 返ってきたフレーム数がずれても対応させる
+            patch = Image.open(result[rk])
+            if patch.size != (cx2 - cx1, cy2 - cy1):
+                patch = patch.resize((cx2 - cx1, cy2 - cy1))
+            frame = Image.open(files[f0 + k])
+            frame.paste(patch.convert(frame.mode), (cx1, cy1))
+            frame.save(files[f0 + k])
+        shutil.rmtree(job, ignore_errors=True)
+
+    media.run(
+        ["ffmpeg", "-y", "-framerate", f"{fps:.6f}", "-i", str(frames_dir / "%06d.png"), "-i", str(video),
+         "-map", "0:v", "-map", "1:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+         "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest", str(out)]
+    )
 
 
 class ProPainterLocalProvider:
@@ -155,54 +280,19 @@ class ProPainterLocalProvider:
     root = Path(os.environ.get("PROPAINTER_ROOT", "/opt/ProPainter"))
 
     def remove_text(self, video: Path, regions: list[dict], out: Path, work_dir: Path) -> None:
-        import shutil
         import subprocess
         import sys
 
-        from PIL import Image, ImageDraw
-
-        info = media.probe(video)
-        frames_dir = work_dir / "frames"
-        frames_dir.mkdir(parents=True, exist_ok=True)
-        media.run(["ffmpeg", "-y", "-i", str(video), "-vsync", "0", str(frames_dir / "%06d.png")])
-        files = sorted(frames_dir.glob("*.png"))
-        fps = info["fps"]
-
-        for i, win in enumerate(plan_windows(regions, fps, len(files), (info["width"], info["height"]))):
-            f0, f1 = win["frames"]
-            m0, m1 = win["mask_frames"]
-            cx1, cy1, cx2, cy2 = win["crop"]
-            bx1, by1, bx2, by2 = win["box"]
-            job = work_dir / f"win{i:03d}"
-            shutil.rmtree(job, ignore_errors=True)
-            (job / "in").mkdir(parents=True)
-            (job / "mask").mkdir()
-            for k, f in enumerate(files[f0:f1]):
-                Image.open(f).crop((cx1, cy1, cx2, cy2)).save(job / "in" / f"{k:05d}.png")
-                m = Image.new("L", (cx2 - cx1, cy2 - cy1), 0)
-                if m0 <= f0 + k < m1:
-                    ImageDraw.Draw(m).rectangle((bx1 - cx1, by1 - cy1, bx2 - cx1, by2 - cy1), fill=255)
-                m.save(job / "mask" / f"{k:05d}.png")
+        def run_window(job: Path, in_dir: Path, mask_dir: Path, fps: float) -> list[Path]:
             subprocess.run(
-                [sys.executable, "inference_propainter.py", "-i", str(job / "in"), "-m", str(job / "mask"),
+                [sys.executable, "inference_propainter.py", "-i", str(in_dir), "-m", str(mask_dir),
                  "-o", str(job / "out"), "--save_frames", "--fp16",
                  "--subvideo_length", os.environ.get("PROPAINTER_SUBVIDEO_LENGTH", "50")],
                 cwd=self.root, check=True,
             )
-            result = sorted((job / "out" / "in" / "frames").glob("*.png"))
-            # テロップが出ている間のフレームだけ、切り抜き部分を差し戻す
-            for k, rf in enumerate(result):
-                if m0 <= f0 + k < m1:
-                    frame = Image.open(files[f0 + k])
-                    frame.paste(Image.open(rf).convert(frame.mode), (cx1, cy1))
-                    frame.save(files[f0 + k])
-            shutil.rmtree(job, ignore_errors=True)
+            return sorted((job / "out" / "in" / "frames").glob("*.png"))
 
-        media.run(
-            ["ffmpeg", "-y", "-framerate", f"{fps:.6f}", "-i", str(frames_dir / "%06d.png"), "-i", str(video),
-             "-map", "0:v", "-map", "1:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-             "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest", str(out)]
-        )
+        inpaint_by_windows(video, regions, out, work_dir, run_window)
 
 
 class ReplicateProPainterProvider:
@@ -233,15 +323,11 @@ class ReplicateProPainterProvider:
         s3.upload_file(str(path), bucket, key)
         return s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=7200)
 
-    def remove_text(self, video: Path, regions: list[dict], out: Path, work_dir: Path) -> None:
+    def _predict(self, video_url: str, mask_url: str) -> str:
+        """予測を作って終わるまで待ち、結果動画の URL を返す。"""
         import requests
 
-        mask = make_mask_video(video, regions, work_dir / "mask.mp4")
-        prefix = f"jobs/{os.environ.get('JOB_ID', 'local')}/inpaint"
-        inputs = {
-            self.conf.get("video_field", "video"): self._presign(video, f"{prefix}/video.mp4"),
-            self.conf.get("mask_field", "mask"): self._presign(mask, f"{prefix}/mask.mp4"),
-        }
+        inputs = {self.conf.get("video_field", "video"): video_url, self.conf.get("mask_field", "mask"): mask_url}
         resp = requests.post(self.api, headers=self.headers, json={"version": self.conf["version"], "input": inputs}, timeout=60)
         if not resp.ok:
             # 402 (残高・支払い) や 422 (入力・バージョン違い) の理由は本文に入っているので、エラーに含める
@@ -256,17 +342,34 @@ class ReplicateProPainterProvider:
         if pred["status"] != "succeeded":
             raise RuntimeError(f"replicate prediction {pred['status']}: {pred.get('error')}")
         output = pred["output"]
-        url = output if isinstance(output, str) else output[-1]
-        with requests.get(url, stream=True, timeout=300) as dl:
-            dl.raise_for_status()
-            with open(out, "wb") as f:
-                for chunk in dl.iter_content(1 << 20):
-                    f.write(chunk)
-        # ProPainter は音声を返さないことがあるので、元動画の音声を戻す
-        tmp = out.with_suffix(".noaudio.mp4")
-        out.rename(tmp)
-        media.run(["ffmpeg", "-y", "-i", str(tmp), "-i", str(video), "-map", "0:v", "-map", "1:a?",
-                   "-c:v", "copy", "-c:a", "copy", "-shortest", str(out)])
+        return output if isinstance(output, str) else output[-1]
+
+    def remove_text(self, video: Path, regions: list[dict], out: Path, work_dir: Path) -> None:
+        """動画全体を送ると GPU のメモリが足りないので、テロップ周辺の短い切り抜き動画ごとに送る。"""
+        import requests
+
+        prefix = f"jobs/{os.environ.get('JOB_ID', 'local')}/inpaint"
+
+        def run_window(job: Path, in_dir: Path, mask_dir: Path, fps: float) -> list[Path]:
+            clip, mask = job / "clip.mp4", job / "mask.mp4"
+            media.run(["ffmpeg", "-y", "-framerate", f"{fps:.6f}", "-i", str(in_dir / "%05d.png"),
+                       "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", str(clip)])
+            media.run(["ffmpeg", "-y", "-framerate", f"{fps:.6f}", "-i", str(mask_dir / "%05d.png"),
+                       "-c:v", "libx264", "-crf", "0", "-pix_fmt", "gray", str(mask)])
+            url = self._predict(self._presign(clip, f"{prefix}/{job.name}/video.mp4"),
+                                self._presign(mask, f"{prefix}/{job.name}/mask.mp4"))
+            result = job / "result.mp4"
+            with requests.get(url, stream=True, timeout=300) as dl:
+                dl.raise_for_status()
+                with open(result, "wb") as f:
+                    for chunk in dl.iter_content(1 << 20):
+                        f.write(chunk)
+            (job / "res").mkdir(exist_ok=True)
+            media.run(["ffmpeg", "-y", "-i", str(result), "-vsync", "0", str(job / "res" / "%05d.png")])
+            return sorted((job / "res").glob("*.png"))
+
+        inpaint_by_windows(video, regions, out, work_dir, run_window,
+                           parallel=int(os.environ.get("REPLICATE_PARALLEL", "4")))
 
 
 def get_provider(name: str | None = None) -> InpaintProvider:
