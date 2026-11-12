@@ -3,7 +3,7 @@
   "context": {
     "bedrockRegion": "us-east-1",
     "bedrockModelId": "anthropic.claude-opus-5-5",
-    "inpaintProvider": "propainter_local",
+    "inpaintProvider": "replicate",
     "maxQaAttempts": 2,
     "translatePromptId": "",
     "qaPromptId": ""
