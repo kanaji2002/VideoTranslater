@@ -66,6 +66,15 @@ aws secretsmanager put-secret-value --secret-id <InpaintSecretArn> \
 
 `worker/vt/inpaint_providers.py` の `HttpInpaintProvider` は「動画 + マスク動画を送ってジョブを作り、完了をポーリングして結果をダウンロードする」形のひな形です。実際の API 仕様に合わせて修正してください。
 
+## 食材ルールリスト
+
+`rules/ingredients.json` を S3 の `rules/ingredients.json` に置くと、③ の翻訳がこのリストの表記を使います
+(例: みりん → `mirin (or sweet sherry)`)。リストに無い食材には代用品を付けません。ファイルが無ければルールなしで翻訳します。
+
+```bash
+aws s3 cp rules/ingredients.json s3://<BucketName>/rules/ingredients.json
+```
+
 ## 使い方
 
 ```bash

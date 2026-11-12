@@ -80,7 +80,7 @@ AWS_CLOUD = (
 BOX = "rounded=1;arcSize=3;html=1;fillColor={f};strokeColor={s};verticalAlign=top;align=left;spacingLeft=10;fontSize=12;dashed={d};"
 
 # ---- groups ----
-group("AWS Cloud", 160, 40, 1500, 640, AWS_CLOUD)
+group("AWS Cloud", 160, -20, 1500, 700, AWS_CLOUD)
 group("Step Functions ワークフロー / ECS on Fargate ワーカー", 440, 90, 980, 300, BOX.format(f="#FFF8F0", s="#ED7100", d=1))
 group("保存・状態", 1450, 90, 180, 560, BOX.format(f="#F2FBF4", s="#3F8624", d=0))
 
@@ -93,7 +93,7 @@ sfn = icon("Step Functions", "step_functions", INTEG, 300, 450)
 y1, y2 = 140, 280
 extract = icon("① フレーム抽出\n(ffmpeg)", "fargate", COMPUTE, 480, y1)
 ocr = icon("② 日本語OCR\n(PaddleOCR)", "fargate", COMPUTE, 640, y1)
-translate = icon("③ OCR補正+英訳", "fargate", COMPUTE, 800, y1)
+translate = icon("③ OCR補正+英訳\n(食材ルール適用)", "fargate", COMPUTE, 800, y1)
 inpaint = icon("④ 日本語テロップ除去", "fargate", COMPUTE, 960, y1)
 compose = icon("⑤ 英語テキスト合成\n(ffmpeg+Pillow)", "fargate", COMPUTE, 960, y2)
 qa = icon("⑥ エージェント確認", "fargate", COMPUTE, 800, y2)
@@ -109,6 +109,7 @@ s3_jobs = icon("S3 jobs/{id}/\nocr.json ほか", "simple_storage_service", STORA
 ddb = icon("DynamoDB\nジョブ状態", "dynamodb", DB, 1508, 330)
 s3_out = icon("S3 output/\n(NG時 review/)", "simple_storage_service", STORAGE, 1508, 520)
 
+rules = icon("S3 rules/\n食材ルールリスト", "simple_storage_service", STORAGE, 800, 0)
 api = plain_icon("文字除去 / インペイント API\n(外部サービス)", "internet_alt1", 1720, 140)
 
 # ---- edges ----
@@ -123,6 +124,7 @@ edge(inpaint, compose)
 edge(compose, qa)
 edge(qa, publish, "OK", color="#3F8624")
 edge(qa, translate, "NG: 再翻訳 (最大2回)", color="#D13212", dashed=True)
+edge(rules, translate, "代用品ルールを参照", color="#7AA116")
 edge(translate, bedrock, dashed=True)
 edge(qa, bedrock, "フレーム画像で確認", dashed=True)
 edge(inpaint, api, "HTTPS", color="#ED7100")

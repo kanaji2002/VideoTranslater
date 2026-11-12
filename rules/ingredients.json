@@ -1,0 +1,19 @@
+{
+  "_説明": "日本の食材・調味料の英語表記ルール。en に書いた表記をそのまま使う。代用品は括弧で補足する。s3://<バケット>/rules/ingredients.json に置くと翻訳工程が参照する。",
+  "rules": [
+    {"ja": "醤油", "en": "soy sauce"},
+    {"ja": "みりん", "en": "mirin (or sweet sherry)"},
+    {"ja": "料理酒", "en": "cooking sake (or dry sherry)"},
+    {"ja": "酒", "en": "sake (or dry sherry)"},
+    {"ja": "だしの素", "en": "dashi powder (or chicken bouillon)"},
+    {"ja": "顆粒だし", "en": "dashi powder (or chicken bouillon)"},
+    {"ja": "めんつゆ", "en": "mentsuyu (or soy sauce + a little sugar)"},
+    {"ja": "ポン酢", "en": "ponzu (or soy sauce + lemon juice)"},
+    {"ja": "片栗粉", "en": "potato starch (cornstarch also OK)"},
+    {"ja": "大葉", "en": "shiso leaves (basil also OK)"},
+    {"ja": "鶏ガラスープの素", "en": "chicken bouillon powder"},
+    {"ja": "白だし", "en": "shiro dashi (or light soy sauce + dashi powder)"},
+    {"ja": "長ねぎ", "en": "Japanese leek (or leek / green onion)"},
+    {"ja": "油揚げ", "en": "fried tofu pouch (aburaage)"}
+  ]
+}

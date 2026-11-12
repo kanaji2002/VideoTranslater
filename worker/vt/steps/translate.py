@@ -26,7 +26,12 @@ SYSTEM = """あなたは料理レシピ動画のローカライズ担当です�
    - 元のテロップ枠に収まるよう、max_chars を超えないことを最優先にする。
    - 固有名詞・商品名はローマ字表記か一般名詞に置き換える。
 3. 後から載せたテロップではなく、映像内の看板・商品パッケージなどの文字なら is_overlay を false にする。
+4. ingredient_rules に載っている食材・調味料は、その en の表記をそのまま使う (代用品の括弧書きも含む)。
+   枠に収まらない場合だけ括弧部分を省いてよい。
+   ルールに無い食材で英語圏のスーパーで手に入りにくいものは、勝手に代用品を作らず英語名のみにする。
 review_feedback がある場合は、その指摘を必ず反映すること。"""
+
+RULES_KEY = os.environ.get("INGREDIENT_RULES_KEY", "rules/ingredients.json")
 
 SCHEMA = {
     "type": "object",
@@ -104,6 +109,8 @@ def run(ctx: JobContext) -> dict:
             content.append(llm.image_block(crops[seg["id"]]))
 
     payload = {"segments": items}
+    if ctx.exists(RULES_KEY):  # 食材ルールリスト (無ければルールなしで翻訳)
+        payload["ingredient_rules"] = json.loads(ctx.download(RULES_KEY, ctx.local("rules.json")).read_text())["rules"]
     if feedback:
         payload["review_feedback"] = feedback
     content.append({"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)})

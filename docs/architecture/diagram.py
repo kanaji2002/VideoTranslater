@@ -55,13 +55,14 @@ with Diagram(
         ):
             extract = Fargate("① フレーム抽出\nffmpeg")
             ocr = Fargate("② 日本語OCR\nPaddleOCR")
-            translate = Fargate("③ OCR補正+英訳")
+            translate = Fargate("③ OCR補正+英訳\n(食材ルール適用)")
             inpaint = Fargate("④ 日本語テロップ除去")
             compose = Fargate("⑤ 英語テキスト合成\nffmpeg + Pillow")
             qa = Fargate("⑥ エージェント確認")
             publish = Fargate("⑦ 保存")
 
         bedrock = Bedrock("Amazon Bedrock\nClaude")
+        rules = SimpleStorageServiceS3Bucket("S3 rules/\n食材ルールリスト\n例: みりん → mirin\n(or sweet sherry)")
         secrets = SecretsManager("Secrets Manager\nAPIキー")
 
         with Cluster("保存・状態", graph_attr={"fontname": FONT, "bgcolor": "#F2FBF4", "pencolor": "#3F8624"}):
@@ -81,6 +82,7 @@ with Diagram(
     qa >> Edge(label="NG: 指摘を反映して\n再翻訳 (最大2回)", color="#D13212", style="dashed") >> translate
 
     # 外部・AI サービス
+    rules >> Edge(label="代用品ルールを参照", color="#7AA116") >> translate
     translate >> Edge(style="dotted") >> bedrock
     qa >> Edge(label="フレーム画像で確認", style="dotted") >> bedrock
     inpaint >> Edge(label="HTTPS", color="#ED7100") >> inpaint_api
