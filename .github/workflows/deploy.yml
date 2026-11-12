@@ -1,0 +1,62 @@
+# AWS へのデプロイ (コンテナのビルドも GitHub 上で行う)
+# 必要な GitHub Secrets (Settings > Secrets and variables > Actions):
+#   AWS_ROLE_ARN                              … OIDC で引き受ける IAM ロール (推奨)
+#   または AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY … アクセスキー
+name: deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      # GPU 用イメージ (約 10GB) のビルド用に、ランナーの空き容量を増やす
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CDK
+        working-directory: infra
+        run: |
+          npm install -g aws-cdk
+          pip install -r requirements.txt
+
+      - name: Bootstrap (初回のみ実質的に動く)
+        working-directory: infra
+        run: cdk bootstrap
+
+      - name: Deploy
+        working-directory: infra
+        run: cdk deploy --require-approval never --outputs-file outputs.json
+
+      - name: Show outputs
+        working-directory: infra
+        run: cat outputs.json >> "$GITHUB_STEP_SUMMARY"

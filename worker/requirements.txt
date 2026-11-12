@@ -1,0 +1,8 @@
+boto3>=1.35
+anthropic[bedrock]>=0.70
+paddlepaddle==2.6.2
+paddleocr==2.9.1
+opencv-python-headless>=4.9
+numpy<2
+Pillow>=10
+requests>=2.31
