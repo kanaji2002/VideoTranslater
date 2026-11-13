@@ -104,18 +104,18 @@ def note(text: str, x: int, y: int, w: int, h: int) -> str:
 ROW = 230                      # 工程アイコンの y
 X = {n: 560 + 150 * (n - 1) for n in range(1, 8)}  # 工程 n のアイコンの x
 
-group("AWS Cloud (us-east-1)", 150, -60, 1640, 660, AWS_CLOUD)
+group("AWS Cloud (us-east-1)", 150, -40, 1640, 570, AWS_CLOUD)
 fargate = group("ECS on Fargate ワーカー (1つのイメージを STEP で切替)", 530, 150, 1020, 220, BOX.format(f="#FFF8F0", s="#ED7100", d=1))
-group("AWS Batch GPU (g6/g5・待機中は0台)\nGPU 枠の承認後、④ をここで実行\n(ECR の GPU 用イメージ)", 1220, 430, 250, 110,
+group("AWS Batch GPU (g6/g5・待機中は0台)\nGPU 枠の承認後、④ をここで実行\n(ECR の GPU 用イメージ)", 1220, 390, 250, 100,
       BOX.format(f="#FFFFFF", s="#ED7100", d=1))
-group("保存先", 1600, -10, 160, 580, BOX.format(f="#F2FBF4", s="#3F8624", d=0))
+group("保存先", 1600, -10, 160, 500, BOX.format(f="#F2FBF4", s="#3F8624", d=0))
 
 # ---- 入口 ----
 user = plain_icon("利用者", "user", 40, ROW)
 s3_in = icon("S3\ninput/*.mp4", "simple_storage_service", STORAGE, 190, ROW)
 eb = icon("EventBridge", "eventbridge", INTEG, 300, ROW)
 sfn = icon("Step Functions\nワークフロー", "step_functions", INTEG, 410, ROW)
-sns = icon("SNS\n完了・失敗通知", "sns", INTEG, 410, 430)
+sns = icon("SNS\n完了・失敗通知", "sns", INTEG, 410, 390)
 
 # ---- 工程 ----
 s1 = icon("① フレーム抽出\n(ffmpeg)", "fargate", COMPUTE, X[1], ROW)
@@ -127,22 +127,22 @@ s6 = icon("⑥ 確認エージェント\n(完成フレームを判定)", "fargat
 s7 = icon("⑦ 保存", "fargate", COMPUTE, X[7], ROW)
 
 # ---- 上: AI ----
-bedrock = icon("Amazon Bedrock\nNova 2 Lite (③・⑥ で使用)\n※Claude は承認後に戻す", "bedrock", ML, 1085, -20)
+bedrock = icon("Amazon Bedrock\nNova 2 Lite (③・⑥ で使用)\n※Claude は承認後に戻す", "bedrock", ML, 1085, 0)
 
 # ---- 下: つなぎ先 ----
-logs = icon("CloudWatch Logs", "cloudwatch_2", MGMT, 560, 430)
-ecr = icon("ECR\nコンテナイメージ", "ecr", COMPUTE, 710, 430)
-rules = icon("S3 rules/\n食材ルールリスト", "simple_storage_service", STORAGE, X[3], 430)
-secrets = icon("Secrets Manager\nReplicate APIキー", "secrets_manager", SEC, X[4] + 110, 430)
+logs = icon("CloudWatch Logs", "cloudwatch_2", MGMT, 560, 390)
+ecr = icon("ECR\nコンテナイメージ", "ecr", COMPUTE, 710, 390)
+rules = icon("S3 rules/\n食材ルールリスト", "simple_storage_service", STORAGE, X[3], 390)
+secrets = icon("Secrets Manager\nReplicate APIキー", "secrets_manager", SEC, X[4] + 110, 390)
 
 # ---- 右: 保存先 ----
 s3_jobs = icon("S3 jobs/{id}/\n途中ファイル", "simple_storage_service", STORAGE, 1648, 30)
 s3_out = icon("S3 output/\n(NG時は review/)", "simple_storage_service", STORAGE, 1648, ROW)
-ddb = icon("DynamoDB\nジョブ状態", "dynamodb", DB, 1648, 430)
+ddb = icon("DynamoDB\nジョブ状態", "dynamodb", DB, 1648, 390)
 
 # ---- AWS の外 ----
-replicate = plain_icon("Replicate (外部API)\nProPainter を GPU で実行\n※現在はこちら", "internet_alt1", X[4], 650)
-gha = group("GitHub Actions\nイメージのビルド + cdk deploy", 650, 650, 190, 60,
+replicate = plain_icon("Replicate (外部API)\nProPainter を GPU で実行\n※現在はこちら", "internet_alt1", X[4], 570)
+gha = group("GitHub Actions\nイメージのビルド + cdk deploy", 650, 575, 190, 60,
             "rounded=1;html=1;whiteSpace=wrap;fillColor=#24292F;strokeColor=none;fontColor=#FFFFFF;fontSize=12;align=center;verticalAlign=middle;")
 
 note(
@@ -152,7 +152,7 @@ note(
     "・② OCR: PaddleOCR (日本語モデル、コンテナ内)<br>"
     "・④ 文字消し: ProPainter。現在は Replicate、GPU 枠の承認後は AWS Batch<br>"
     "切り替えはすべて infra/cdk.json (llmProvider / converseModelId / inpaintProvider)",
-    1150, 640, 640, 110,
+    1150, 560, 640, 110,
 )
 
 # ---- 線 ----
@@ -172,22 +172,22 @@ edge(s6, s3, "NG: 再翻訳 (最大2回)", color="#D13212", dashed=True,
      exit=(0.3, 0), entry=(0.8, 0), points=[(X[6] + 19, 180), (X[3] + 51, 180)])
 # AI 呼び出し (上の Bedrock へ)
 edge(s3, bedrock, "補正・英訳", color="#01A88D", dashed=True, exit=(0.2, 0), entry=(0, 0.5),
-     points=[(X[3] + 13, 12)])
+     points=[(X[3] + 13, 32)])
 edge(s6, bedrock, "フレームで確認", color="#01A88D", dashed=True, exit=(0.8, 0), entry=(1, 0.5),
-     points=[(X[6] + 51, 12)])
+     points=[(X[6] + 51, 32)])
 # 下のつなぎ先
 edge(rules, s3, "ルール参照", color="#7AA116")
 edge(s4, replicate, "HTTPS", color="#ED7100", exit=(0.3, 1), entry=(0.3, 0))
 edge(s4, secrets, color="#DD344C", dashed=True, exit=(0.8, 1), entry=(0.5, 0),
-     points=[(X[4] + 51, 400), (X[4] + 142, 400)])
+     points=[(X[4] + 51, 368), (X[4] + 142, 368)])
 # 保存
 edge(s7, s3_out)
-edge(s7, ddb, dashed=True, exit=(0.5, 1), entry=(0, 0.5), points=[(X[7] + 32, 462)])
+edge(s7, ddb, dashed=True, exit=(0.5, 1), entry=(0, 0.5), points=[(X[7] + 32, 422)])
 edge(s2, s3_jobs, "OCR結果など", dashed=True, color="#7AA116", exit=(0.5, 0), entry=(0, 0.5),
-     points=[(X[2] + 32, -35), (1620, -35), (1620, 62)])
+     points=[(X[2] + 32, -22), (1620, -22), (1620, 62)])
 # 通知・運用
 edge(sfn, sns, "結果", dashed=True)
-edge(sns, user, "メール等", exit=(0, 0.5), entry=(0.5, 1), points=[(72, 462)])
+edge(sns, user, "メール等", exit=(0, 0.5), entry=(0.5, 1), points=[(72, 422)])
 edge(gha, ecr, "push", color="#232F3E")
 edge(ecr, fargate, "pull", color="#AAB7B8", dashed=True, exit=(0.5, 0), entry=(0.18, 1))
 edge(s1, logs, "ログ", color="#AAB7B8", dashed=True, exit=(0.5, 1), entry=(0.5, 0))
@@ -195,7 +195,7 @@ edge(s1, logs, "ログ", color="#AAB7B8", dashed=True, exit=(0.5, 1), entry=(0.5
 xml = (
     '<mxfile host="app.diagrams.net"><diagram id="vt" name="動画テロップ翻訳パイプライン">'
     '<mxGraphModel dx="1800" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" '
-    'fold="1" page="1" pageScale="1" pageWidth="1850" pageHeight="800" math="0" shadow="0"><root>'
+    'fold="1" page="1" pageScale="1" pageWidth="1850" pageHeight="720" math="0" shadow="0"><root>'
     '<mxCell id="0"/><mxCell id="1" parent="0"/>' + "".join(cells) + "</root></mxGraphModel></diagram></mxfile>"
 )
 OUT.write_text(xml.replace("\n", "&#xa;"), encoding="utf-8")
