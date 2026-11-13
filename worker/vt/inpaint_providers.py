@@ -378,6 +378,10 @@ class ReplicateProPainterProvider:
         import requests
 
         inputs = {self.conf.get("video_field", "video"): video_url, self.conf.get("mask_field", "mask"): mask_url}
+        # モデルの追加パラメータ。fp16 (半精度) のままだと短い切り抜き動画で
+        # 「Input type (FloatTensor) and weight type (HalfTensor)」エラーになるため、既定で切る。
+        # シークレットの "extra_inputs" で上書きできる (例: {"fp16": true, "subvideo_length": 50})
+        inputs.update(self.conf.get("extra_inputs", {"fp16": False}))
         body = {"version": self.conf["version"], "input": inputs}
         for attempt in range(30):
             resp = requests.post(self.api, headers=self.headers, json=body, timeout=60)
