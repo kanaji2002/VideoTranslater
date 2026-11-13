@@ -297,6 +297,54 @@ class ProPainterLocalProvider:
         inpaint_by_windows(video, regions, out, work_dir, run_window)
 
 
+def select_output(output) -> str:
+    """Replicate の出力 (URL 1 つ / 一覧 / 辞書) から、文字を消した動画の URL を選ぶ。
+
+    ProPainter は「マスクを重ねた入力」と「補間後の動画 (inpaint_out)」の両方を返すことがあるので、
+    名前に inpaint / out / result を含むものを優先し、mask / masked を含むものは避ける。
+    """
+    import logging
+
+    if isinstance(output, str):
+        urls = [output]
+    elif isinstance(output, dict):
+        urls = [v for v in output.values() if isinstance(v, str)]
+    else:
+        urls = [u for u in output if isinstance(u, str)]
+    logging.getLogger("vt").info("replicate outputs: %s", urls)
+    if not urls:
+        raise RuntimeError(f"replicate の出力に動画がありません: {output!r}")
+
+    def name(u: str) -> str:
+        return u.rsplit("/", 1)[-1].split("?")[0].lower()
+
+    for u in urls:
+        if "inpaint" in name(u):
+            return u
+    rest = [u for u in urls if "mask" not in name(u)]
+    return (rest or urls)[-1]
+
+
+def check_filled(frames: list[Path], masks: list[Path], label: str = "") -> None:
+    """消した部分が黒一色 (= 補間されていない) なら止める。黒い四角のまま公開しないため。"""
+    import numpy as np
+    from PIL import Image
+
+    active = [i for i, m in enumerate(masks) if np.asarray(Image.open(m)).max() > 127]
+    if not active or not frames:
+        return
+    i = active[len(active) // 2]
+    k = min(len(frames) - 1, round(i * len(frames) / len(masks)))
+    m = np.asarray(Image.open(masks[i])) > 127
+    f = np.asarray(Image.open(frames[k]).convert("L").resize(m.shape[::-1]))
+    region = f[m]
+    if region.size and region.mean() < 20 and region.std() < 6:
+        raise RuntimeError(
+            f"replicate の結果 ({label}) で、消した部分が黒一色になっています (平均 {region.mean():.1f})。"
+            "補間後の動画ではない出力を受け取っている可能性があります"
+        )
+
+
 class ReplicateProPainterProvider:
     """Replicate の ProPainter (jd7h/propainter) を呼ぶ。
 
@@ -353,8 +401,7 @@ class ReplicateProPainterProvider:
             pred = requests.get(pred["urls"]["get"], headers=self.headers, timeout=60).json()
         if pred["status"] != "succeeded":
             raise RuntimeError(f"replicate prediction {pred['status']}: {pred.get('error')}")
-        output = pred["output"]
-        return output if isinstance(output, str) else output[-1]
+        return select_output(pred["output"])
 
     def remove_text(self, video: Path, regions: list[dict], out: Path, work_dir: Path) -> None:
         """動画全体を送ると GPU のメモリが足りないので、テロップ周辺の短い切り抜き動画ごとに送る。"""
@@ -376,9 +423,12 @@ class ReplicateProPainterProvider:
                 with open(result, "wb") as f:
                     for chunk in dl.iter_content(1 << 20):
                         f.write(chunk)
+            self._presign(result, f"{prefix}/{job.name}/result.mp4")  # 確認用に S3 へ残す
             (job / "res").mkdir(exist_ok=True)
             media.run(["ffmpeg", "-y", "-i", str(result), "-vsync", "0", str(job / "res" / "%05d.png")])
-            return sorted((job / "res").glob("*.png"))
+            frames = sorted((job / "res").glob("*.png"))
+            check_filled(frames, sorted(mask_dir.glob("*.png")), job.name)
+            return frames
 
         inpaint_by_windows(video, regions, out, work_dir, run_window,
                            parallel=int(os.environ.get("REPLICATE_PARALLEL", "4")))
