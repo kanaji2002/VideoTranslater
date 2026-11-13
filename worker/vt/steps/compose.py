@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .. import media
 from ..context import JobContext
-from ..render import render_text_png
+from ..render import render_caption_png, uniform_font_size
 
 
 def run(ctx: JobContext) -> dict:
@@ -13,12 +13,14 @@ def run(ctx: JobContext) -> dict:
     info = media.probe(clean)
     frame_size = (info["width"], info["height"])
 
+    targets = [s for s in translation["segments"] if s.get("is_overlay", True) and s["en"].strip()]
+    # 文字サイズは全テロップで統一する (長いテロップに合わせて決める)
+    size = uniform_font_size([(s["en"], s["box"]) for s in targets], frame_size)
+
     overlays, placements = [], []
-    for seg in translation["segments"]:
-        if not seg.get("is_overlay", True) or not seg["en"].strip():
-            continue
+    for seg in targets:
         png = ctx.local(f"overlays/{seg['id']}.png")
-        place = render_text_png(seg["en"], seg["box"], png, frame_size)
+        place = render_caption_png(seg["en"], seg["box"], png, frame_size, size)
         overlays.append((png, seg, place))
         placements.append({"id": seg["id"], **place})
 
