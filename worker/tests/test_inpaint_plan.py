@@ -1,4 +1,4 @@
-from vt.inpaint_providers import plan_windows
+from vt.inpaint_providers import check_filled, plan_windows, select_output
 
 
 def test_window_adds_context_and_aligned_crop():
@@ -51,3 +51,27 @@ def test_long_caption_split_into_chunks():
     assert cores[0][0] == 60 and cores[-1][1] == 661
     assert all(a[1] == b[0] for a, b in zip(cores, cores[1:]))
     assert all(w["frames"][1] - w["frames"][0] <= 150 + 120 for w in wins)
+
+
+def test_select_output_prefers_inpainted_video():
+    urls = ["https://r/x/masked_in.mp4", "https://r/x/inpaint_out.mp4"]
+    assert select_output(urls).endswith("inpaint_out.mp4")
+    assert select_output(list(reversed(urls))).endswith("inpaint_out.mp4")
+    assert select_output("https://r/x/out.mp4").endswith("out.mp4")
+    assert select_output(["https://r/x/mask.mp4", "https://r/x/result.mp4"]).endswith("result.mp4")
+
+
+def test_check_filled_rejects_black_region(tmp_path):
+    import pytest
+    from PIL import Image, ImageDraw
+
+    mask = Image.new("L", (100, 40), 0)
+    ImageDraw.Draw(mask).rectangle((20, 10, 80, 30), fill=255)
+    mask.save(tmp_path / "m.png")
+    black = Image.new("RGB", (100, 40), (200, 180, 150))
+    ImageDraw.Draw(black).rectangle((20, 10, 80, 30), fill=(0, 0, 0))
+    black.save(tmp_path / "black.png")
+    with pytest.raises(RuntimeError):
+        check_filled([tmp_path / "black.png"], [tmp_path / "m.png"])
+    Image.new("RGB", (100, 40), (200, 180, 150)).save(tmp_path / "ok.png")
+    check_filled([tmp_path / "ok.png"], [tmp_path / "m.png"])
