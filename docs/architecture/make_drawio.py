@@ -150,7 +150,13 @@ gha = group("GitHub Actions\nイメージのビルド + cdk deploy", 640, 610, 2
 
 # ---- 線 ----
 cy = ROW + S // 2  # アイコン中央の高さ
-edge(user, s3_in, "アップロード", label_dy=-14)  # 文字は線の上に置く
+edge(user, s3_in)
+# 「アップロード」は S3 アイコンの真上に置く
+cells.append(
+    f'<mxCell id="{nid()}" value="アップロード" style="text;html=1;align=center;verticalAlign=middle;fontSize={FS - 1};'
+    f'fontColor=#545B64;strokeColor=none;fillColor=none;" vertex="1" parent="1">'
+    f'<mxGeometry x="{150 + S // 2 - 60}" y="{ROW - 28}" width="120" height="24" as="geometry"/></mxCell>'
+)
 edge(s3_in, eb)
 edge(eb, sfn, "起動")
 edge(sfn, s1, "RunTask")
