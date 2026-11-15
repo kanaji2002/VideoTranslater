@@ -64,7 +64,7 @@ def group(label: str, x: int, y: int, w: int, h: int, style: str) -> str:
 
 def edge(src: str, dst: str, label: str = "", color: str = "#545B64", dashed: bool = False,
          exit: tuple[float, float] | None = None, entry: tuple[float, float] | None = None,
-         points: list[tuple[int, int]] | None = None) -> None:
+         points: list[tuple[int, int]] | None = None, label_dy: int = 0) -> None:
     """exit / entry は接続位置 (0〜1)、points は折れ曲がり位置。線の交差を避けるために指定する。"""
     i = nid()
     style = (
@@ -78,9 +78,10 @@ def edge(src: str, dst: str, label: str = "", color: str = "#545B64", dashed: bo
     pts = ""
     if points:
         pts = '<Array as="points">' + "".join(f'<mxPoint x="{x}" y="{y}"/>' for x, y in points) + "</Array>"
+    off = f'<mxPoint x="0" y="{label_dy}" as="offset"/>' if label_dy else ""
     cells.append(
         f'<mxCell id="{i}" value="{escape(label)}" style="{style}" edge="1" parent="1" source="{src}" target="{dst}">'
-        f'<mxGeometry relative="1" as="geometry">{pts}</mxGeometry></mxCell>'
+        f'<mxGeometry relative="1" as="geometry">{pts}{off}</mxGeometry></mxCell>'
     )
 
 
@@ -107,12 +108,12 @@ def note(text: str, x: int, y: int, w: int, h: int) -> str:
 ROW = 230                      # 工程アイコンの y
 X = {n: 560 + 165 * (n - 1) for n in range(1, 8)}  # 工程 n のアイコンの x
 
-group("AWS Cloud (us-east-1)", 135, -40, 1775, 600, AWS_CLOUD)
+group("AWS Cloud (us-east-1)", 135, -40, 1735, 600, AWS_CLOUD)
 fargate = group("ECS on Fargate ワーカー (1つのイメージを STEP で切替)", 530, 140, 1110, 245, BOX.format(f="#FFF8F0", s="#ED7100", d=1))
-group("保存先", 1710, -10, 170, 540, BOX.format(f="#F2FBF4", s="#3F8624", d=0))
+group("保存先", 1670, -10, 170, 540, BOX.format(f="#F2FBF4", s="#3F8624", d=0))
 
 # ---- 入口 ----
-user = plain_icon("利用者", "user", 0, ROW)
+user = plain_icon("利用者", "user", 30, ROW)
 s3_in = icon("S3\ninput/*.mp4", "simple_storage_service", STORAGE, 150, ROW)
 eb = icon("EventBridge", "eventbridge", INTEG, 283, ROW)
 sfn = icon("Step Functions\nワークフロー", "step_functions", INTEG, 410, ROW)
@@ -137,9 +138,9 @@ rules = icon("S3 rules/\n食材ルールリスト", "simple_storage_service", ST
 secrets = icon("Secrets Manager\nReplicate APIキー", "secrets_manager", SEC, X[4] + 120, 410)
 
 # ---- 右: 保存先 ----
-s3_jobs = icon("S3 jobs/{id}/\n各工程の途中結果", "simple_storage_service", STORAGE, 1755, 30)
-s3_out = icon("S3 output/\n(NG時は review/)", "simple_storage_service", STORAGE, 1755, ROW)
-ddb = icon("DynamoDB\nジョブ状態", "dynamodb", DB, 1755, 410)
+s3_jobs = icon("S3 jobs/{id}/\n各工程の途中結果", "simple_storage_service", STORAGE, 1715, 30)
+s3_out = icon("S3 output/\n(NG時は review/)", "simple_storage_service", STORAGE, 1715, ROW)
+ddb = icon("DynamoDB\nジョブ状態", "dynamodb", DB, 1715, 410)
 
 # ---- AWS の外 ----
 replicate = plain_icon("Replicate (外部API)\nProPainter を GPU で実行", "internet_alt1", X[4], 600)
@@ -149,7 +150,13 @@ gha = group("GitHub Actions\nイメージのビルド + cdk deploy", 640, 610, 2
 
 # ---- 線 ----
 cy = ROW + S // 2  # アイコン中央の高さ
-edge(user, s3_in, "アップロード")
+edge(user, s3_in)
+# 「アップロード」は S3 アイコンの真上に置く
+cells.append(
+    f'<mxCell id="{nid()}" value="アップロード" style="text;html=1;align=center;verticalAlign=middle;fontSize={FS - 1};'
+    f'fontColor=#545B64;strokeColor=none;fillColor=none;" vertex="1" parent="1">'
+    f'<mxGeometry x="{150 + S // 2 - 60}" y="{ROW - 28}" width="120" height="24" as="geometry"/></mxCell>'
+)
 edge(s3_in, eb)
 edge(eb, sfn, "起動")
 edge(sfn, s1, "RunTask")
@@ -176,10 +183,10 @@ edge(s4, secrets, color="#DD344C", dashed=True, exit=(0.8, 1), entry=(0.5, 0),
 edge(s7, s3_out)
 edge(s7, ddb, dashed=True, exit=(0.5, 1), entry=(0, 0.5), points=[(X[7] + S // 2, 410 + S // 2)])
 edge(fargate, s3_jobs, "途中結果", dashed=True, color="#7AA116", exit=(0.22, 0), entry=(0, 0.5),
-     points=[(530 + 1110 * 0.22, -22), (1730, -22), (1730, 30 + S // 2)])
+     points=[(530 + 1110 * 0.22, -22), (1690, -22), (1690, 30 + S // 2)])
 # 通知・運用
 edge(sfn, sns, "結果", dashed=True)
-edge(sns, user, "メール等", exit=(0, 0.5), entry=(0.5, 1), points=[(S // 2, 410 + S // 2)])
+edge(sns, user, "メール等", exit=(0, 0.5), entry=(0.5, 1), points=[(30 + S // 2, 410 + S // 2)])
 edge(gha, ecr, "push", color="#232F3E")
 edge(ecr, fargate, "pull", color="#AAB7B8", dashed=True, exit=(0.5, 0), entry=(0.18, 1))
 edge(s1, logs, "ログ", color="#AAB7B8", dashed=True, exit=(0.5, 1), entry=(0.5, 0))
@@ -187,7 +194,7 @@ edge(s1, logs, "ログ", color="#AAB7B8", dashed=True, exit=(0.5, 1), entry=(0.5
 xml = (
     '<mxfile host="app.diagrams.net"><diagram id="vt" name="動画テロップ翻訳パイプライン">'
     '<mxGraphModel dx="1800" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" '
-    'fold="1" page="1" pageScale="1" pageWidth="1950" pageHeight="780" math="0" shadow="0"><root>'
+    'fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="780" math="0" shadow="0"><root>'
     '<mxCell id="0"/><mxCell id="1" parent="0"/>' + "".join(cells) + "</root></mxGraphModel></diagram></mxfile>"
 )
 OUT.write_text(xml.replace("\n", "&#xa;"), encoding="utf-8")
