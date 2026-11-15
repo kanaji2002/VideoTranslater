@@ -195,7 +195,7 @@ def plan_windows(regions: list[dict], fps: float, n_frames: int, size: tuple[int
 
 
 def inpaint_by_windows(video: Path, regions: list[dict], out: Path, work_dir: Path, run_window, *,
-                       parallel: int = 1) -> None:
+                       parallel: int = 1, context_sec: float = 2.0) -> None:
     """テロップ周辺の範囲ごとに ProPainter を実行し、結果を元のフレームに貼り戻して動画にする。
 
     run_window(job_dir, in_dir, mask_dir, fps) は ProPainter の結果フレーム (PNG のパス一覧) を返す。
@@ -215,6 +215,7 @@ def inpaint_by_windows(video: Path, regions: list[dict], out: Path, work_dir: Pa
     fps = info["fps"]
     # 1 回に送る長さ (秒)。長いほど依頼回数は減るが、GPU メモリを多く使う
     windows = plan_windows(regions, fps, len(files), (info["width"], info["height"]),
+                           context_sec=context_sec,
                            max_sec=float(os.environ.get("INPAINT_WINDOW_SEC", "10")))
 
     def active(win: dict, idx: int) -> list[tuple]:
@@ -295,6 +296,113 @@ class ProPainterLocalProvider:
             return sorted((job / "out" / "in" / "frames").glob("*.png"))
 
         inpaint_by_windows(video, regions, out, work_dir, run_window)
+
+
+def temporal_fill(frames: "np.ndarray", masks: "np.ndarray", *, dilate_px: int = 3, ring_px: int = 4,
+                  match_thr: float = 10.0, time_weight: float = 0.02, max_candidates: int = 80,
+                  feather_px: float = 2.0) -> "np.ndarray":
+    """固定カメラの動画向けの文字消し (GPU 不要)。
+
+    文字の帯を縦の列ごとに埋める。各列について、文字のすぐ上下 (ring_px 行) の見た目が
+    今のフレームとそっくりな「その列に文字が出ていないフレーム」を探し、その背景を持ってくる
+    (テロップの前後や切れ目には本物の背景が映っている)。
+    人の手や体が横切っていて見た目が合うフレームがない列は、文字の上下の色から縦方向に補う。
+    別の時刻の体が貼り込まれるのを防ぐため。
+
+    frames: (n, h, w, 3) uint8、masks: (n, h, w) bool (True = 消す)。戻り値は frames と同じ形。
+    """
+    import cv2
+    import numpy as np
+
+    n, h, w = masks.shape
+    if dilate_px > 0:  # 文字のフチ・影まで消すため、少し広げる
+        kernel = np.ones((2 * dilate_px + 1, 2 * dilate_px + 1), np.uint8)
+        masks = np.stack([cv2.dilate(m.astype(np.uint8), kernel) > 0 for m in masks])
+    f32 = frames.astype(np.float32)
+    rows = np.arange(h)[:, None]
+    out = frames.copy()
+    for t in range(n):
+        m = masks[t]
+        cols = np.where(m.any(axis=0))[0]
+        if not len(cols):
+            continue
+        top = np.where(m.any(axis=0), m.argmax(axis=0), 0)
+        bot = np.where(m.any(axis=0), h - 1 - m[::-1].argmax(axis=0), -1)
+        band = (rows >= top) & (rows <= bot) & m.any(axis=0)  # 列ごとに上端〜下端をまとめて埋める
+        # 文字のすぐ上下の行 (比較に使う)
+        ring = np.zeros((h, w), bool)
+        for d in range(1, ring_px + 1):
+            for r, ok in ((top - d, top - d >= 0), (bot + d, bot + d < h)):
+                ring[np.clip(r, 0, h - 1)[ok], np.arange(w)[ok]] = True
+        ring &= ~m & m.any(axis=0)
+        # 候補: この帯に文字が出ていないフレーム (多ければ間引く)
+        clear = [c for c in range(n) if not (masks[c] & band).any()]
+        if len(clear) > max_candidates:
+            idx = np.linspace(0, len(clear) - 1, max_candidates).round().astype(int)
+            clear = [clear[i] for i in idx]
+        filled = f32[t].copy()
+        best_cost = np.full(w, np.inf, np.float32)
+        best = np.full(w, -1)
+        if clear:
+            cur = f32[t]
+            cnt = np.maximum(ring.sum(axis=0), 1)
+            for c in clear:
+                diff = (np.abs(f32[c] - cur).mean(axis=2) * ring).sum(axis=0) / cnt
+                cost = diff + time_weight * abs(c - t)
+                better = cost < best_cost
+                best_cost[better], best[better] = cost[better], c
+        use = (best >= 0) & (best_cost - time_weight * np.abs(best - t) < match_thr)
+        for c in np.unique(best[use]):
+            sel = band & (use & (best == c))[None, :]
+            filled[sel] = f32[c][sel]
+        # 見た目が合うフレームがない列: 文字の上下の色を縦方向に直線でつなぐ
+        rest = band & ~use[None, :]
+        if rest.any():
+            xs = np.where(rest.any(axis=0))[0]
+            up = f32[t][np.clip(top[xs] - 1, 0, h - 1), xs]
+            dn = f32[t][np.clip(bot[xs] + 1, 0, h - 1), xs]
+            span = np.maximum(bot[xs] - top[xs] + 2, 1).astype(np.float32)
+            k = (rows - (top[xs] - 1)) / span  # (h, len(xs))
+            lin = up[None] * (1 - k[..., None]) + dn[None] * k[..., None]
+            sub = rest[:, xs]
+            col = filled[:, xs]
+            col[sub] = lin[sub]
+            filled[:, xs] = col
+            # 縦の筋が目立たないよう、補った部分だけ横方向に少しぼかす
+            blur = cv2.GaussianBlur(filled, (9, 1), 0)
+            filled[rest] = blur[rest]
+        if feather_px > 0:  # 帯の縁を元の画素となじませる
+            a = cv2.GaussianBlur(band.astype(np.float32), (0, 0), feather_px)
+            a = np.maximum(a, cv2.erode(band.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(np.float32))
+            a = a[..., None]
+            out[t] = (filled * a + f32[t] * (1 - a)).round().clip(0, 255).astype(np.uint8)
+        else:
+            out[t] = filled.round().clip(0, 255).astype(np.uint8)
+    return out
+
+
+class TemporalFillProvider:
+    """GPU も外部 API も使わずに、前後のフレームの背景で文字を消す (固定カメラの料理動画向け)。"""
+
+    def remove_text(self, video: Path, regions: list[dict], out: Path, work_dir: Path) -> None:
+        import numpy as np
+        from PIL import Image
+
+        def run_window(job: Path, in_dir: Path, mask_dir: Path, fps: float) -> list[Path]:
+            frames = np.stack([np.asarray(Image.open(p).convert("RGB")) for p in sorted(in_dir.glob("*.png"))])
+            masks = np.stack([np.asarray(Image.open(p)) > 127 for p in sorted(mask_dir.glob("*.png"))])
+            res = temporal_fill(frames, masks)
+            (job / "res").mkdir(exist_ok=True)
+            paths = []
+            for k, f in enumerate(res):
+                p = job / "res" / f"{k:05d}.png"
+                Image.fromarray(f).save(p)
+                paths.append(p)
+            return paths
+
+        # 背景が見えるフレームを探せるよう、前後の文脈を長めに取る
+        inpaint_by_windows(video, regions, out, work_dir, run_window,
+                           context_sec=float(os.environ.get("TEMPORAL_CONTEXT_SEC", "6")))
 
 
 def select_output(output) -> str:
@@ -448,4 +556,6 @@ def get_provider(name: str | None = None) -> InpaintProvider:
         return ReplicateProPainterProvider()
     if name == "http":
         return HttpInpaintProvider()
+    if name == "temporal":
+        return TemporalFillProvider()
     raise ValueError(f"unknown INPAINT_PROVIDER: {name}")
