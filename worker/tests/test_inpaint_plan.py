@@ -75,3 +75,19 @@ def test_check_filled_rejects_black_region(tmp_path):
         check_filled([tmp_path / "black.png"], [tmp_path / "m.png"])
     Image.new("RGB", (100, 40), (200, 180, 150)).save(tmp_path / "ok.png")
     check_filled([tmp_path / "ok.png"], [tmp_path / "m.png"])
+
+
+def test_small_crop_is_expanded_to_min_size():
+    # 640x360 の下端のテロップ。高さ 27px の枠でも、切り抜きは 432x240 以上 (画面内) になる
+    regions = [{"box": [113, 305, 527, 332], "start": 1.0, "end": 6.0}]
+    (w,) = plan_windows(regions, fps=50, n_frames=2333, size=(640, 360))
+    x1, y1, x2, y2 = w["crop"]
+    assert y2 - y1 >= 232 and x2 - x1 >= 432 - 8
+    assert 0 <= x1 and 0 <= y1 and x2 <= 640 and y2 <= 360
+    assert y1 <= 305 and y2 >= 332 - 8
+
+
+def test_expand_keeps_inside_small_frame():
+    from vt.inpaint_providers import _expand
+
+    assert _expand((10, 10, 50, 30), (432, 240), (320, 180)) == (0, 0, 320, 180)

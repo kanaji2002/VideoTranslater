@@ -123,8 +123,25 @@ def _overlaps(a: tuple, b: tuple) -> bool:
     return a[0] < b[1] and b[0] < a[1]
 
 
+def _expand(area: tuple, min_size: tuple[int, int], size: tuple[int, int]) -> tuple:
+    """切り抜き area を、画面からはみ出さない範囲で最低 min_size (幅, 高さ) まで広げる。"""
+    out = list(area)
+    for lo, hi, need, limit in ((0, 2, min_size[0], size[0]), (1, 3, min_size[1], size[1])):
+        need = min(need, limit)
+        extra = need - (out[hi] - out[lo])
+        if extra > 0:
+            out[lo] -= extra // 2
+            out[hi] += extra - extra // 2
+            if out[lo] < 0:
+                out[hi], out[lo] = out[hi] - out[lo], 0
+            if out[hi] > limit:
+                out[lo], out[hi] = out[lo] - (out[hi] - limit), limit
+    return tuple(out)
+
+
 def plan_windows(regions: list[dict], fps: float, n_frames: int, size: tuple[int, int],
-                 *, context_sec: float = 2.0, pad_px: int = 48, max_sec: float = 10.0) -> list[dict]:
+                 *, context_sec: float = 2.0, pad_px: int = 48, max_sec: float = 10.0,
+                 min_size: tuple[int, int] = (432, 240)) -> list[dict]:
     """テロップごとに ProPainter へ渡す範囲 (前後の文脈を含むフレーム範囲 + 周囲を含む切り抜き) を決める。
 
     動画全体を GPU に載せるとメモリが足りないため、テロップの周辺だけを切り出して処理する。
@@ -167,7 +184,9 @@ def plan_windows(regions: list[dict], fps: float, n_frames: int, size: tuple[int
 
     out = []
     for g in sorted(groups, key=lambda g: g["frames"][0]):
-        cx1, cy1, cx2, cy2 = g["area"]
+        # ProPainter (特に動きを推定する RAFT) は小さすぎる切り抜きだと計算が壊れて真っ黒になるので、
+        # 学習時の大きさ (432x240) 程度まで周りを含めて広げる。広げた部分は貼り戻さない
+        cx1, cy1, cx2, cy2 = _expand(g["area"], min_size, (w, h))
         cw, ch = (cx2 - cx1) // 8 * 8, (cy2 - cy1) // 8 * 8
         m0 = min(m[1][0] for m in g["masks"])
         m1 = min(n_frames, max(m[1][1] for m in g["masks"]))
@@ -192,6 +211,9 @@ def plan_windows(regions: list[dict], fps: float, n_frames: int, size: tuple[int
                 }
             )
     return out
+
+
+PASTE_MARGIN = 10  # 貼り戻す範囲を消した枠より何 px 広げるか (ProPainter の mask_dilation=4 より大きく)
 
 
 def inpaint_by_windows(video: Path, regions: list[dict], out: Path, work_dir: Path, run_window, *,
@@ -265,7 +287,14 @@ def inpaint_by_windows(video: Path, regions: list[dict], out: Path, work_dir: Pa
             if patch.size != (cx2 - cx1, cy2 - cy1):
                 patch = patch.resize((cx2 - cx1, cy2 - cy1))
             frame = Image.open(files[f0 + k])
-            frame.paste(patch.convert(frame.mode), (cx1, cy1))
+            # 切り抜き全体ではなく、消した枠の周り (ProPainter がマスクを広げる分 + 余白) だけ差し戻す。
+            # 切り抜きを広げたので、別のテロップの領域を古いまま上書きしないため
+            keep = Image.new("L", patch.size, 0)
+            for bx1, by1, bx2, by2 in active(win, f0 + k):
+                ImageDraw.Draw(keep).rectangle(
+                    (bx1 - cx1 - PASTE_MARGIN, by1 - cy1 - PASTE_MARGIN,
+                     bx2 - cx1 + PASTE_MARGIN, by2 - cy1 + PASTE_MARGIN), fill=255)
+            frame.paste(patch.convert(frame.mode), (cx1, cy1), keep)
             frame.save(files[f0 + k])
         shutil.rmtree(job, ignore_errors=True)
 
