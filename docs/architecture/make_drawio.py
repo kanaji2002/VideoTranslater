@@ -113,7 +113,7 @@ fargate = group("ECS on Fargate ワーカー (1つのイメージを STEP で切
 group("保存先", 1670, -10, 170, 540, BOX.format(f="#F2FBF4", s="#3F8624", d=0))
 
 # ---- 入口 ----
-user = plain_icon("利用者", "user", -30, ROW)
+user = plain_icon("利用者", "user", 30, ROW)
 s3_in = icon("S3\ninput/*.mp4", "simple_storage_service", STORAGE, 150, ROW)
 eb = icon("EventBridge", "eventbridge", INTEG, 283, ROW)
 sfn = icon("Step Functions\nワークフロー", "step_functions", INTEG, 410, ROW)
@@ -186,7 +186,7 @@ edge(fargate, s3_jobs, "途中結果", dashed=True, color="#7AA116", exit=(0.22,
      points=[(530 + 1110 * 0.22, -22), (1690, -22), (1690, 30 + S // 2)])
 # 通知・運用
 edge(sfn, sns, "結果", dashed=True)
-edge(sns, user, "メール等", exit=(0, 0.5), entry=(0.5, 1), points=[(-30 + S // 2, 410 + S // 2)])
+edge(sns, user, "メール等", exit=(0, 0.5), entry=(0.5, 1), points=[(30 + S // 2, 410 + S // 2)])
 edge(gha, ecr, "push", color="#232F3E")
 edge(ecr, fargate, "pull", color="#AAB7B8", dashed=True, exit=(0.5, 0), entry=(0.18, 1))
 edge(s1, logs, "ログ", color="#AAB7B8", dashed=True, exit=(0.5, 1), entry=(0.5, 0))
