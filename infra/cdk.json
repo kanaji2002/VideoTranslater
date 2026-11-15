@@ -6,7 +6,7 @@
     "llmProvider": "converse",
     "converseModelId": "us.amazon.nova-2-lite-v1:0",
     "anthropicModelId": "claude-opus-5-5",
-    "inpaintProvider": "replicate",
+    "inpaintProvider": "temporal",
     "maxQaAttempts": 2,
     "translatePromptId": "",
     "qaPromptId": ""
